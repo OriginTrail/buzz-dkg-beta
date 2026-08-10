@@ -55,6 +55,7 @@ env:
 jobs:
   lint-and-unittest:
     name: lint + unittest + render matrix
+    if: github.repository == 'block/buzz'
     runs-on: ubuntu-latest
     permissions:
       contents: read

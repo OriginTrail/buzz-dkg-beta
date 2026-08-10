@@ -162,18 +162,18 @@ New to Buzz? Pick the path that matches you.
 
 ### I just want to try the app
 
-Grab a packaged build from the [latest release](https://github.com/block/buzz/releases/latest):
+Grab a packaged build from the [latest Buzz DKG Beta release](https://github.com/OriginTrail/buzz-dkg-beta/releases/latest):
 
 | Platform | File |
 |---|---|
-| macOS (Apple Silicon) | `Buzz_<version>_aarch64.dmg` |
-| macOS (Intel) | `Buzz_<version>_x64.dmg` |
-| Linux (x86_64) | `Buzz_<version>_amd64.AppImage` or `Buzz_<version>_amd64.deb` |
-| Windows (x64) | `Buzz_<version>_x64-setup_alpha-unsigned.exe` |
+| macOS (Apple Silicon) | `Buzz DKG Beta_<version>_aarch64.dmg` or `.zip` |
+| macOS (Intel) | `Buzz DKG Beta_<version>_x86_64.dmg` or `.zip` |
+| Linux (x86_64) | `Buzz DKG Beta_<version>_amd64.AppImage` or `.deb` |
+| Windows (x86_64) | `Buzz DKG Beta_<version>_x64-setup.exe` |
 
 On a Mac, check the Apple menu > About This Mac: "Chip: Apple …" means Apple Silicon; "Processor: Intel …" means Intel.
 
-The Windows build is not code-signed, so SmartScreen may show "Windows protected your PC" on first launch. If available, click **More info**, then **Run anyway**.
+These beta builds are unsigned. See the [desktop beta installation and security guide](docs/dkg-beta-desktop.md) before installing them.
 
 
 By default the app connects to `ws://localhost:3000`. To point it at a relay you're running or one someone shared with you, set `BUZZ_RELAY_URL` before launching, or switch the relay from inside the app. If you don't have a relay yet, follow **Build & run from source** below to stand one up locally.
@@ -185,12 +185,6 @@ To run a relay for your team without managing servers, you can deploy one to Rai
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/buzz-relay-block)
 
 See [here](https://engineering.block.xyz/blog/run-your-own-buzz-relay) for details.
-
-### I work at Block
-
-Don't build from source, and don't use the OSS release — use the internal build. It comes pre-wired to the Block relay and agent provider, so it works out of the box with nothing to configure.
-
-Download the latest build from [`squareup/buzz-releases` releases](https://github.com/squareup/buzz-releases/releases/latest) and install it.
 
 ### I want to build & run from source
 
@@ -204,7 +198,7 @@ You'll need [Docker](https://docs.docker.com/get-docker/) and [Hermit](https://c
 
 **Once:**
 ```bash
-git clone https://github.com/block/buzz.git && cd buzz
+git clone https://github.com/OriginTrail/buzz-dkg-beta.git && cd buzz-dkg-beta
 . ./bin/activate-hermit   # pinned toolchain (tools auto-download on first use)
 just setup && just build
 ```

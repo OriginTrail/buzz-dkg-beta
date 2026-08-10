@@ -1,59 +1,64 @@
-# Testing the Web of Trust memory prototype
+# Testing Buzz DKG Beta
 
-Thanks for testing! ~2-minute setup, and **you do not need to run any server or DKG node** — the memory panel resolves from the relay.
+Thanks for testing. You do not need to run a relay or DKG node: the app queries
+the community's DKG through the authenticated Buzz relay.
 
 ## 1. Download the app
 
-Go to the repo's **[Releases](../../releases)** page and download the build for your OS:
+Open the repository's [Releases](../../releases) page and download the package
+for your operating system:
 
-| OS | File |
-|----|------|
-| **macOS — Apple Silicon** (M1–M4) | `Buzz-Memory_*_aarch64.dmg` |
-| **macOS — Intel** | `Buzz-Memory_*_x86_64.dmg` |
-| **Windows** | `Buzz-Memory_*_windows-x64.exe` |
+| OS | Package |
+|---|---|
+| macOS Apple Silicon | `*aarch64.dmg` or `*aarch64.zip` |
+| macOS Intel | `*x86_64.dmg` or `*x86_64.zip` |
+| Windows x86-64 | `*.exe` |
+| Linux x86-64 | `*.AppImage` or `*.deb` |
 
-*(Not sure which Mac? Apple menu →  About This Mac → "Apple M…" = Apple Silicon.)*
+On a Mac, **About This Mac** reports an Apple M-series chip or an Intel
+processor. Detailed unsigned-build installation steps are in
+[dkg-beta-desktop.md](dkg-beta-desktop.md).
 
-## 2. Install (unsigned test build)
+## 2. Create or import an identity
 
-These are **unsigned** test builds, so your OS will warn you:
+Buzz DKG Beta uses an isolated app profile and can run beside regular Buzz.
 
-- **macOS:** open the `.dmg`, drag Buzz to Applications. macOS will say *"Buzz is damaged and can't be opened"* — that's the quarantine flag on an unsigned build, not a broken download, and **right-click → Open does NOT bypass this variant**. The fix is one Terminal command:
-  ```
-  xattr -cr /Applications/Buzz.app
-  ```
-  then open Buzz from Applications normally.
-- **Windows:** run the `.exe`. SmartScreen will warn — click **"More info" → "Run anyway"**.
+- To retain an existing relay membership, import the same Nostr identity
+  locally. Never share its private `nsec`.
+- For a new identity, create and export a backup, then send only its
+  64-character public key to the community operator for relay admission.
 
-## 3. Connect to the community
+On macOS, repeated Keychain prompts are a failure and should be reported. The
+controlled beta deliberately uses local owner-only key files there.
 
-1. Launch Buzz.
-2. Add the community relay: **`wss://macbook-pro-8.tailb02f7e.ts.net`**
-   - You must be on our **Tailscale tailnet** to reach it (ping Žiga for access if needed).
-3. Sign in with your existing Nostr key.
+## 3. Join the community
 
-## 4. Open the memory panel
+1. If the identity is new, wait for the tester coordinator to confirm that its
+   public key has been admitted to the relay and authorized for the test
+   channel.
+2. Add `https://buzz-dkg-relay.origintrail.io` as the community URL.
+3. Open the channel supplied by the tester coordinator.
 
-1. Open the **Web of Trust** channel.
-2. Click the floating **◈ Memory** chip (bottom-right of the channel).
-3. The panel opens beside the chat.
+No Tailscale connection or Cloudflare login is required.
 
-## Do I need to run a DKG node?
+## 4. Exercise DKG memory
 
-**No.** The panel resolves the **full channel memory** — all layers, decisions, evidence trails, and per-participant sub-graphs — through the **community gateway** (the community's DKG node, reached over the tailnet). You'll see a blue banner: *"✓ Resolved via community gateway — full memory from the community's node."* You see exactly what the operator sees.
+1. Exchange a few messages and invoke a channel agent.
+2. Open the floating **◈ Memory** chip.
+3. Ask about a decision, contributor, or implementation topic discussed in the
+   channel.
+4. Follow an evidence or node-resolution link and confirm its source matches
+   the conversation.
 
-Running your own DKG edge node upgrades that banner to green — *"✓ verified through your node"* — meaning your machine independently verified the graph rather than trusting the gateway. Optional, **not required for testing**.
-
-If both the gateway and a local node are unreachable, the panel degrades to **discovery mode** (amber, *"shown for discovery — unverified"*), reading only the relay receipts. If you see amber, your tailnet connection to the gateway is down — check Tailscale.
-
-See **[dkg-memory.md](dkg-memory.md)** for what the feature does and the three modes.
+The normal beta path is the authenticated community provider. A personal DKG
+Edge node remains an optional later upgrade for independent verification.
 
 ## What to report
 
-- Did the app **install and launch**? Any OS warnings/blocks?
-- Did the **◈ Memory** chip appear in the Web of Trust channel?
-- Did the panel **populate** in discovery mode? Screenshot either way.
-- Is the *"discovery / unverified"* labeling **clear** or confusing?
-- Anything that felt broken, slow, or unclear.
-
-Reply in the channel or DM Žiga. Thank you! 🙏
+- Operating system and CPU architecture.
+- Whether installation and first launch succeeded.
+- Any Keychain, SmartScreen, Gatekeeper, Secret Service, or permission prompts.
+- Whether the app retained the same identity after restart.
+- Whether the community and channel joined successfully.
+- Whether **◈ Memory** populated and its evidence links were understandable.
+- Any failed agent tools, stale memory, unexpected authorization, or slow query.

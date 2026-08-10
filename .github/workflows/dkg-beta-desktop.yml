@@ -1,0 +1,329 @@
+name: Buzz DKG Beta desktop
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semver without the leading v
+        required: true
+        default: 0.5.7-dkg-beta.2
+        type: string
+      publish:
+        description: Publish all successful packages as a GitHub prerelease
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: buzz-dkg-beta-desktop-${{ inputs.version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate beta build contract
+    if: github.repository == 'OriginTrail/buzz-dkg-beta' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+
+      - name: Install dependencies
+        run: just desktop-install-ci
+
+      - name: Validate requested version and build contract
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          cd desktop
+          node scripts/set-dkg-beta-version.mjs "$VERSION"
+          pnpm check:dkg-beta
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            runner: macos-15
+            target: aarch64-apple-darwin
+          - arch: x86_64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+
+      - name: Add Rust target
+        run: rustup target add "$TARGET"
+        env:
+          TARGET: ${{ matrix.target }}
+
+      - name: Install dependencies
+        run: just desktop-install-ci
+
+      - name: Set beta version
+        run: cd desktop && node scripts/set-dkg-beta-version.mjs "$VERSION"
+        env:
+          VERSION: ${{ inputs.version }}
+
+      - name: Build unsigned keychain-free packages
+        run: desktop/scripts/build-dkg-beta-macos.sh "$TARGET"
+        env:
+          TARGET: ${{ matrix.target }}
+
+      - name: Validate macOS packages
+        run: |
+          set -euo pipefail
+          BUNDLE_ROOT="desktop/src-tauri/target/${TARGET}/release/bundle"
+          ZIP=$(find "$BUNDLE_ROOT/zip" -name '*.zip' -type f | head -1)
+          [[ -n "$ZIP" ]] || { echo "::error::No macOS ZIP found"; exit 1; }
+          DMG=$(find "$BUNDLE_ROOT/dmg" -name '*.dmg' -type f | head -1 || true)
+          if [[ -z "$DMG" ]]; then
+            echo "::warning::No DMG was produced; publishing the ZIP fallback"
+          fi
+        env:
+          TARGET: ${{ matrix.target }}
+
+      - name: Upload macOS packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: buzz-dkg-beta-macos-${{ matrix.arch }}
+          path: |
+            desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/${{ matrix.target }}/release/bundle/zip/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    name: Linux x86_64
+    needs: validate
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
+    timeout-minutes: 90
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+      TARGET: x86_64-unknown-linux-gnu
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install system dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update -o Acquire::Retries=3
+          apt-get install -y --no-install-recommends \
+            build-essential ca-certificates curl desktop-file-utils file git \
+            libasound2-dev libayatana-appindicator3-dev libgtk-3-dev \
+            librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev \
+            patchelf pkg-config squashfs-tools wget xdg-utils
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Mark workspace safe
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+
+      - name: Add Rust target
+        run: rustup target add "$TARGET"
+
+      - name: Install pinned AppImage tools
+        run: |
+          wget -q --tries=3 --timeout=30 -O /tmp/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  /tmp/appimagetool" | sha256sum -c
+          install -m 755 /tmp/appimagetool /usr/local/bin/appimagetool
+          wget -q --tries=3 --timeout=30 -O /tmp/appimage-runtime \
+            https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          echo "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  /tmp/appimage-runtime" | sha256sum -c
+          install -D -m 644 /tmp/appimage-runtime /usr/local/lib/appimage-runtime
+          echo "APPIMAGETOOL_RUNTIME_FILE=/usr/local/lib/appimage-runtime" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: just desktop-install-ci
+
+      - name: Set beta version
+        run: cd desktop && node scripts/set-dkg-beta-version.mjs "$VERSION"
+        env:
+          VERSION: ${{ inputs.version }}
+
+      - name: Build Linux packages
+        run: desktop/scripts/build-dkg-beta-linux.sh "$TARGET"
+
+      - name: Fix AppImage portability
+        run: |
+          BUNDLE_ROOT="desktop/src-tauri/target/${TARGET}/release/bundle"
+          mapfile -t APPIMAGES < <(find "$BUNDLE_ROOT/appimage" -name '*.AppImage' -type f)
+          [[ ${#APPIMAGES[@]} -eq 1 ]] || {
+            echo "::error::Expected exactly one AppImage, found ${#APPIMAGES[@]}"
+            exit 1
+          }
+          bash desktop/scripts/fix-appimage.sh "${APPIMAGES[0]}"
+
+      - name: Validate Linux packages
+        run: |
+          set -euo pipefail
+          BUNDLE_ROOT="desktop/src-tauri/target/${TARGET}/release/bundle"
+          DEB=$(find "$BUNDLE_ROOT/deb" -name '*.deb' -type f | head -1)
+          APPIMAGE=$(find "$BUNDLE_ROOT/appimage" -name '*.AppImage' -type f | head -1)
+          [[ -n "$DEB" ]] || { echo "::error::No Debian package found"; exit 1; }
+          [[ -n "$APPIMAGE" ]] || { echo "::error::No AppImage found"; exit 1; }
+
+      - name: Upload Linux packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: buzz-dkg-beta-linux-x86_64
+          path: |
+            desktop/src-tauri/target/${{ env.TARGET }}/release/bundle/deb/*.deb
+            desktop/src-tauri/target/${{ env.TARGET }}/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Windows x86_64
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      TARGET: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ env.TARGET }}
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.14.1
+          package-manager-cache: false
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 11.4.0
+
+      - name: Install dependencies
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      - name: Set beta version
+        shell: bash
+        run: cd desktop && node scripts/set-dkg-beta-version.mjs "$VERSION"
+        env:
+          VERSION: ${{ inputs.version }}
+
+      - name: Build Windows installer
+        shell: bash
+        run: desktop/scripts/build-dkg-beta-windows.sh "$TARGET"
+
+      - name: Validate Windows installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE_ROOT="desktop/src-tauri/target/${TARGET}/release/bundle"
+          EXE=$(find "$BUNDLE_ROOT/nsis" -name '*.exe' -type f | head -1)
+          [[ -n "$EXE" ]] || { echo "::error::No NSIS installer found"; exit 1; }
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: buzz-dkg-beta-windows-x86_64
+          path: desktop/src-tauri/target/${{ env.TARGET }}/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish cross-platform prerelease
+    needs: [macos, linux, windows]
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Download packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: buzz-dkg-beta-*
+          path: staged-by-platform
+
+      - name: Flatten and checksum packages
+        run: |
+          set -euo pipefail
+          mkdir dist
+          while IFS= read -r -d '' file; do
+            name=$(basename "$file")
+            [[ ! -e "dist/$name" ]] || {
+              echo "::error::Package basename collision: $name"
+              exit 1
+            }
+            cp "$file" "dist/$name"
+          done < <(find staged-by-platform -type f -print0)
+          [[ $(find dist -type f | wc -l) -ge 5 ]] || {
+            echo "::error::Expected packages for all desktop platforms"
+            exit 1
+          }
+          cd dist
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create or reuse matching draft
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            IS_DRAFT=$(gh release view "$TAG" --json isDraft --jq .isDraft)
+            TARGET_COMMIT=$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)
+            [[ "$IS_DRAFT" == true ]] || {
+              echo "::error::Release $TAG is already published; versions are immutable"
+              exit 1
+            }
+            [[ "$TARGET_COMMIT" == "$GITHUB_SHA" ]] || {
+              echo "::error::Draft $TAG targets $TARGET_COMMIT, not $GITHUB_SHA"
+              exit 1
+            }
+          else
+            gh release create "$TAG" \
+              --draft \
+              --prerelease \
+              --latest=false \
+              --target "$GITHUB_SHA" \
+              --title "Buzz DKG Beta ${VERSION}" \
+              --notes "Unsigned cross-platform beta for testing authenticated OriginTrail DKG community memory. macOS builds are Keychain-free; Windows and Linux use their native credential stores."
+          fi
+
+      - name: Upload complete package set
+        run: |
+          mapfile -t files < <(find dist -type f -print)
+          gh release upload "v${VERSION}" "${files[@]}" --clobber
+
+      - name: Publish release
+        run: gh release edit "v${VERSION}" --draft=false --prerelease --latest=false
