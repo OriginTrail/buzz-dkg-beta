@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Buzz DKG Beta",
+  "version": "0.5.7-dkg-beta.1",
+  "identifier": "io.origintrail.buzz.dkgbeta",
+  "build": {
+    "beforeBuildCommand": "./scripts/build-dkg-beta-frontend.sh"
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": []
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["buzz-dkg-beta"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg"],
+    "createUpdaterArtifacts": false,
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "infoPlist": "Info.dkg-beta.plist"
+    }
+  }
+}

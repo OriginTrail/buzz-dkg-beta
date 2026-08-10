@@ -1,0 +1,50 @@
+name: Buzz DKG Beta macOS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build keychain-free macOS beta
+    if: github.repository == 'OriginTrail/buzz-dkg-beta'
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+
+      - name: Install dependencies
+        run: just desktop-install-ci
+
+      - name: Validate beta build contract
+        run: cd desktop && pnpm check:dkg-beta
+
+      - name: Build unsigned DKG beta packages
+        run: desktop/scripts/build-dkg-beta-macos.sh
+
+      - name: Validate packages
+        run: |
+          set -euo pipefail
+          ZIP=$(find desktop/src-tauri/target/release/bundle/zip -name '*.zip' -type f | head -1)
+          [[ -n "$ZIP" ]] || { echo "::error::No DKG beta ZIP found"; exit 1; }
+
+          DMG=$(find desktop/src-tauri/target/release/bundle/dmg -name '*.dmg' -type f | head -1 || true)
+          if [[ -z "$DMG" ]]; then
+            echo "::warning::No DMG was produced; publishing the ZIP fallback"
+          fi
+
+      - name: Upload DKG beta packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: buzz-dkg-beta-macos-${{ runner.arch }}-${{ github.sha }}
+          path: |
+            desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/release/bundle/zip/*.zip
+          if-no-files-found: error
+          retention-days: 7
