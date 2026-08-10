@@ -67,7 +67,9 @@ check(
 );
 check(
   frontendBuildScript.includes("vite build --mode dkg-beta") &&
-    packageJson.scripts?.["build:dkg-beta"]?.includes("vite build --mode dkg-beta"),
+    packageJson.scripts?.["build:dkg-beta"]?.includes(
+      "vite build --mode dkg-beta",
+    ),
   "the beta frontend build must load the dkg-beta mode",
 );
 check(
@@ -144,7 +146,9 @@ check(
 check(
   commandDiscovery.indexOf("let mut dirs = std::env::current_exe()") >= 0 &&
     commandDiscovery.indexOf("let mut dirs = std::env::current_exe()") <
-      commandDiscovery.indexOf("dirs.extend(profile_target_dirs(&workspace_root_dir()))"),
+      commandDiscovery.indexOf(
+        "dirs.extend(profile_target_dirs(&workspace_root_dir()))",
+      ),
   "the running app bundle must win over compile-time workspace sidecars",
 );
 
