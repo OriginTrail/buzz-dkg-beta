@@ -51,7 +51,7 @@ test("hires: openclaw Traces + Graph", async ({ page }) => {
   );
   await page.getByTestId("dkg-memory-toggle").click();
   const panel = page.getByTestId("dkg-memory-panel");
-  await expect(panel.getByText(/what this channel remembers/i)).toBeVisible({
+  await expect(panel.getByTestId("dkg-channel-graph")).toBeVisible({
     timeout: 25_000,
   });
 

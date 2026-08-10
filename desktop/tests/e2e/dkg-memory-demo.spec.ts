@@ -66,10 +66,10 @@ test.describe("dkg memory panel demo", () => {
     await page.getByTestId("dkg-memory-toggle").click();
     const panel = page.getByTestId("dkg-memory-panel");
     await expect(panel).toBeVisible();
-    await expect(panel.getByText("Verified through your node")).toBeVisible({
+    await expect(panel.getByText("Your DKG node")).toBeVisible({
       timeout: 20_000,
     });
-    await expect(panel.getByText(/what this channel remembers/i)).toBeVisible({
+    await expect(panel.getByTestId("dkg-channel-graph")).toBeVisible({
       timeout: 20_000,
     });
     await waitForAnimations(page);
@@ -118,7 +118,7 @@ test.describe("dkg memory panel demo", () => {
     await emit(page, DELIBERATION[4]); // one receipt to bind the CG
     await page.getByTestId("dkg-memory-toggle").click();
     const panel = page.getByTestId("dkg-memory-panel");
-    await expect(panel.getByText(/what this channel remembers/i)).toBeVisible({
+    await expect(panel.getByTestId("dkg-channel-graph")).toBeVisible({
       timeout: 20_000,
     });
     // Open a real subgraph as graph.
@@ -169,7 +169,7 @@ test.describe("dkg memory panel demo", () => {
     await emit(page, DELIBERATION[4]);
     await page.getByTestId("dkg-memory-toggle").click();
     const panel = page.getByTestId("dkg-memory-panel");
-    await expect(panel.getByText(/what this channel remembers/i)).toBeVisible({
+    await expect(panel.getByTestId("dkg-channel-graph")).toBeVisible({
       timeout: 20_000,
     });
 
@@ -253,10 +253,10 @@ test.describe("dkg memory panel demo", () => {
     }
     await page.getByTestId("dkg-memory-toggle").click();
     const panel = page.getByTestId("dkg-memory-panel");
-    await expect(
-      panel.getByText(/resolved through the community dkg provider/i),
-    ).toBeVisible({ timeout: 25_000 });
-    await expect(panel.getByText(/what this channel remembers/i)).toBeVisible({
+    await expect(panel.getByText("Community DKG")).toBeVisible({
+      timeout: 25_000,
+    });
+    await expect(panel.getByTestId("dkg-channel-graph")).toBeVisible({
       timeout: 25_000,
     });
     await waitForAnimations(page);
@@ -279,9 +279,9 @@ test.describe("dkg memory panel demo", () => {
     }
     await page.getByTestId("dkg-memory-toggle").click();
     const panel = page.getByTestId("dkg-memory-panel");
-    await expect(
-      panel.getByText("Shown for discovery", { exact: false }),
-    ).toBeVisible({ timeout: 20_000 });
+    await expect(panel.getByText("Memory provider unavailable")).toBeVisible({
+      timeout: 20_000,
+    });
     await waitForAnimations(page);
     await panel.screenshot({ path: `${SHOTS}/05-discovery-fallback.png` });
   });
