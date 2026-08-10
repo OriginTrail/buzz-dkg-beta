@@ -108,7 +108,7 @@ The Windows script runs from Git Bash. The macOS script accepts
 ## Release workflow
 
 Run **Buzz DKG Beta desktop** from the Actions tab on `main`. Supply a unique
-semver such as `0.5.7-dkg-beta.2`. With `publish` disabled, packages remain
+semver such as `0.5.7-dkg-beta.3`. With `publish` disabled, packages remain
 14-day workflow artifacts. With `publish` enabled, the workflow waits for all
 four native builds, creates checksums, and publishes the complete set as one
 immutable GitHub prerelease.
@@ -121,4 +121,6 @@ immutable GitHub prerelease.
 - On macOS, complete onboarding without a Keychain authorization prompt.
 - On Windows and Linux, confirm native credential storage works across restart.
 - Join the public DKG relay, exchange a message, invoke a managed agent, and
-  query the channel's DKG memory.
+  confirm its successful turn creates a signed kind-40009 memory proposal.
+- Confirm the integration accepts that proposal and the channel's Shared
+  Working Memory triple count increases before querying the new fact.

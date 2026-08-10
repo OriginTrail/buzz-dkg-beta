@@ -50,7 +50,7 @@ TAURI_BUNDLER_DMG_IGNORE_CI="${TAURI_BUNDLER_DMG_IGNORE_CI:-true}" \
   --verbose \
   --no-sign \
   --target "$TARGET" \
-  --bundles dmg \
+  --bundles app,dmg \
   --config src-tauri/tauri.dkg-beta.conf.json \
   -- \
   --no-default-features

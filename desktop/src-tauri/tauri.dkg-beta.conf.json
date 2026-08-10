@@ -1,10 +1,10 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Buzz DKG Beta",
-  "version": "0.5.7-dkg-beta.2",
+  "version": "0.5.7-dkg-beta.3",
   "identifier": "io.origintrail.buzz.dkgbeta",
   "build": {
-    "beforeBuildCommand": "./scripts/build-dkg-beta-frontend.sh"
+    "beforeBuildCommand": "pnpm build:dkg-beta"
   },
   "plugins": {
     "updater": {

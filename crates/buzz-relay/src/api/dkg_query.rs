@@ -27,11 +27,12 @@ use super::{api_error, bridge, internal_error, not_found};
 
 /// Maximum public request body accepted by `/api/dkg/query`.
 pub(crate) const MAX_REQUEST_BYTES: usize = 16 * 1024;
-const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+pub(super) const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_NAME_BYTES: usize = 256;
 const MAX_URI_BYTES: usize = 2048;
+const MAX_SPARQL_BYTES: usize = 8 * 1024;
 
-static HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> = LazyLock::new(|| {
+pub(super) static HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> = LazyLock::new(|| {
     reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(2))
         .redirect(reqwest::redirect::Policy::none())
@@ -45,6 +46,7 @@ static HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> = LazyLock::new(||
 struct QueryRequest {
     channel_id: Uuid,
     operation: Operation,
+    scope: Option<QueryScope>,
     arguments: Value,
 }
 
@@ -53,9 +55,39 @@ struct QueryRequest {
 enum Operation {
     ChannelMemory,
     ContributorTrail,
+    SoftwareContributors,
+    DecisionTrace,
     SubgraphGraph,
     SubgraphTriples,
     Evidence,
+    SemanticQuery,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QueryScope {
+    r#type: QueryScopeType,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum QueryScopeType {
+    CurrentChannel,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum QueryView {
+    Both,
+    Shared,
+    Verified,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SemanticQueryArguments {
+    sparql: String,
+    view: Option<QueryView>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -66,6 +98,32 @@ struct EmptyArguments {}
 #[serde(deny_unknown_fields)]
 struct PubkeyArguments {
     pubkey: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum ComponentType {
+    Function,
+    Class,
+    Interface,
+    File,
+    Package,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SoftwareContributorArguments {
+    repository: String,
+    component_name: String,
+    component_type: Option<ComponentType>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DecisionTraceArguments {
+    repository: String,
+    commit_sha: String,
+    component_name: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -85,8 +143,71 @@ struct UriArguments {
 struct ForwardRequest {
     channel_id: Uuid,
     operation: Operation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<QueryScope>,
     arguments: Value,
     requester_pubkey: String,
+}
+
+fn bounded_sparql(value: String) -> Result<String, (StatusCode, Json<Value>)> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > MAX_SPARQL_BYTES
+        || value
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "sparql must contain 1..=8192 UTF-8 bytes and no binary control characters",
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+fn canonical_repository(value: String) -> Result<String, (StatusCode, Json<Value>)> {
+    let mut repository = url::Url::parse(&value)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid repository URL"))?;
+    if repository.scheme() != "https"
+        || !repository.username().is_empty()
+        || repository.password().is_some()
+        || repository.query().is_some()
+        || repository.fragment().is_some()
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "repository must be a canonical HTTPS URL",
+        ));
+    }
+    let mut path = repository.path().trim_end_matches('/').to_string();
+    if path.to_ascii_lowercase().ends_with(".git") {
+        path.truncate(path.len() - 4);
+    }
+    if path.is_empty() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "repository URL must include a repository path",
+        ));
+    }
+    if repository.host_str() == Some("github.com") {
+        let segments = path
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>();
+        if segments.len() != 2 {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "GitHub repository URL must contain owner/repository",
+            ));
+        }
+        path = format!(
+            "/{}/{}",
+            segments[0].to_ascii_lowercase(),
+            segments[1].to_ascii_lowercase()
+        );
+    }
+    repository.set_path(&path);
+    Ok(repository.to_string())
 }
 
 fn parse_and_sanitize_request(
@@ -100,6 +221,13 @@ fn parse_and_sanitize_request(
         )
     })?;
 
+    if !matches!(request.operation, Operation::SemanticQuery) && request.scope.is_some() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "scope is only accepted for semantic_query",
+        ));
+    }
+
     let arguments = match request.operation {
         Operation::ChannelMemory => {
             let arguments: EmptyArguments = parse_arguments(request.arguments)?;
@@ -112,6 +240,30 @@ fn parse_and_sanitize_request(
                 .to_hex();
             serde_json::to_value(arguments)
         }
+        Operation::SoftwareContributors => {
+            let mut arguments: SoftwareContributorArguments = parse_arguments(request.arguments)?;
+            arguments.repository = canonical_repository(arguments.repository)?;
+            arguments.component_name =
+                bounded_text("componentName", arguments.component_name, MAX_NAME_BYTES)?;
+            serde_json::to_value(arguments)
+        }
+        Operation::DecisionTrace => {
+            let mut arguments: DecisionTraceArguments = parse_arguments(request.arguments)?;
+            arguments.repository = canonical_repository(arguments.repository)?;
+            arguments.component_name =
+                bounded_text("componentName", arguments.component_name, MAX_NAME_BYTES)?;
+            arguments.commit_sha = arguments.commit_sha.to_ascii_lowercase();
+            if arguments.commit_sha.len() < 7
+                || arguments.commit_sha.len() > 64
+                || !arguments
+                    .commit_sha
+                    .chars()
+                    .all(|character| character.is_ascii_hexdigit())
+            {
+                return Err(api_error(StatusCode::BAD_REQUEST, "invalid commitSha"));
+            }
+            serde_json::to_value(arguments)
+        }
         Operation::SubgraphGraph | Operation::SubgraphTriples => {
             let mut arguments: NameArguments = parse_arguments(request.arguments)?;
             arguments.name = bounded_text("name", arguments.name, MAX_NAME_BYTES)?;
@@ -122,12 +274,32 @@ fn parse_and_sanitize_request(
             arguments.uri = bounded_text("uri", arguments.uri, MAX_URI_BYTES)?;
             serde_json::to_value(arguments)
         }
+        Operation::SemanticQuery => {
+            if !matches!(
+                &request.scope,
+                Some(QueryScope {
+                    r#type: QueryScopeType::CurrentChannel
+                })
+            ) {
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    "semantic_query requires scope.type=current_channel",
+                ));
+            }
+            let mut arguments: SemanticQueryArguments = parse_arguments(request.arguments)?;
+            arguments.sparql = bounded_sparql(arguments.sparql)?;
+            if arguments.view.is_none() {
+                arguments.view = Some(QueryView::Both);
+            }
+            serde_json::to_value(arguments)
+        }
     }
     .map_err(|_| internal_error("serializing sanitized DKG query arguments"))?;
 
     Ok(ForwardRequest {
         channel_id: request.channel_id,
         operation: request.operation,
+        scope: request.scope,
         arguments,
         requester_pubkey: requester.to_hex(),
     })
@@ -164,7 +336,7 @@ fn channel_is_accessible(accessible_channels: &[Uuid], channel_id: Uuid) -> bool
     accessible_channels.contains(&channel_id)
 }
 
-async fn enforce_authoritative_channel_read(
+pub(super) async fn enforce_authoritative_channel_read(
     state: &AppState,
     tenant: &TenantContext,
     channel_id: Uuid,
@@ -245,7 +417,7 @@ pub async fn query(
     bounded_json_response(response).await
 }
 
-fn upstream_error(error: reqwest::Error) -> (StatusCode, Json<Value>) {
+pub(super) fn upstream_error(error: reqwest::Error) -> (StatusCode, Json<Value>) {
     if error.is_timeout() {
         api_error(StatusCode::GATEWAY_TIMEOUT, "DKG query gateway timed out")
     } else {
@@ -254,7 +426,7 @@ fn upstream_error(error: reqwest::Error) -> (StatusCode, Json<Value>) {
     }
 }
 
-async fn bounded_json_response(
+pub(super) async fn bounded_json_response(
     response: reqwest::Response,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let status = response.status();
@@ -306,6 +478,16 @@ mod tests {
         .expect("serialize test request")
     }
 
+    fn semantic_request(sparql: &str, view: Option<&str>) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "channelId": Uuid::new_v4(),
+            "operation": "semantic_query",
+            "scope": { "type": "current_channel" },
+            "arguments": { "sparql": sparql, "view": view },
+        }))
+        .expect("serialize semantic query")
+    }
+
     #[test]
     fn accepts_only_operation_specific_arguments() {
         let requester = requester();
@@ -314,6 +496,14 @@ mod tests {
             (
                 "contributor_trail",
                 serde_json::json!({ "pubkey": nostr::Keys::generate().public_key().to_hex() }),
+            ),
+            (
+                "software_contributors",
+                serde_json::json!({ "repository": "https://github.com/acme/api", "componentName": "verifyToken", "componentType": "function" }),
+            ),
+            (
+                "decision_trace",
+                serde_json::json!({ "repository": "https://github.com/Acme/API.git/", "commitSha": "A1B2C3D4", "componentName": "Authentication gateway" }),
             ),
             ("subgraph_graph", serde_json::json!({ "name": "decisions" })),
             (
@@ -328,6 +518,71 @@ mod tests {
             let sanitized = parse_and_sanitize_request(&request(operation, arguments), &requester)
                 .expect("allowlisted operation");
             assert_eq!(sanitized.requester_pubkey, requester.to_hex());
+            if matches!(
+                sanitized.operation,
+                Operation::SoftwareContributors | Operation::DecisionTrace
+            ) {
+                assert_eq!(
+                    sanitized.arguments["repository"],
+                    "https://github.com/acme/api"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn accepts_only_current_channel_semantic_queries_and_sanitizes_defaults() {
+        let requester = requester();
+        let sanitized = parse_and_sanitize_request(
+            &semantic_request(
+                "SELECT ?s WHERE { GRAPH ?g { ?s <urn:type> <urn:Decision> } } LIMIT 25",
+                None,
+            ),
+            &requester,
+        )
+        .expect("valid semantic query");
+        assert!(matches!(sanitized.operation, Operation::SemanticQuery));
+        assert_eq!(sanitized.arguments["view"], "both");
+        assert!(matches!(
+            sanitized.scope,
+            Some(QueryScope {
+                r#type: QueryScopeType::CurrentChannel
+            })
+        ));
+
+        let missing_scope = serde_json::json!({
+            "channelId": Uuid::new_v4(),
+            "operation": "semantic_query",
+            "arguments": { "sparql": "ASK { <urn:s> <urn:p> ?o }" }
+        });
+        assert!(parse_and_sanitize_request(
+            &serde_json::to_vec(&missing_scope).expect("serialize"),
+            &requester
+        )
+        .is_err());
+        assert!(parse_and_sanitize_request(
+            &semantic_request(
+                "SELECT ?s WHERE { ?s <urn:p> ?o } LIMIT 10\0",
+                Some("shared")
+            ),
+            &requester
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn repository_is_required_and_must_be_canonicalizable() {
+        let requester = requester();
+        for arguments in [
+            serde_json::json!({ "componentName": "verifyToken" }),
+            serde_json::json!({ "repository": "http://github.com/acme/api", "componentName": "verifyToken" }),
+            serde_json::json!({ "repository": "https://github.com/acme/api/issues", "componentName": "verifyToken" }),
+        ] {
+            assert!(parse_and_sanitize_request(
+                &request("software_contributors", arguments),
+                &requester,
+            )
+            .is_err());
         }
     }
 

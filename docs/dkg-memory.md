@@ -53,7 +53,8 @@ default, and an anchor alone is not a guarantee of payload availability.
 
 ## What you see in the panel
 
-Open any channel with `@dkg` activity and click the floating **◈ Memory** chip.
+Open any channel whose relay advertises DKG memory and click the floating
+**◈ Memory** chip.
 
 - **Layers** — WM / SWM / VM at a glance for this channel's Context Graph.
 - **Decisions** — the captured decisions, each with its title, digest, and time.
@@ -62,6 +63,11 @@ Open any channel with `@dkg` activity and click the floating **◈ Memory** chip
 - **Sub-graphs** — per-participant partitions: the *WHY* view.
 - **Evidence** — expand any decision to see its sources, lineage
   (`derived_from`), memory layer, and a replay pointer back into the node.
+- **Software memory** — supply the canonical repository URL and ask a fixed,
+  scoped question such as **Who changed this function?** or **Why did this
+  commit affect this component?** Repository scope prevents unrelated,
+  same-named symbols from being combined. The answer remains inside the
+  current channel graph and includes its evidence trail.
 
 ### Three ways it resolves
 
@@ -117,18 +123,56 @@ same items. This is what a first-time tester sees with zero infrastructure.
 
 ## How it works
 
-1. Agents post ordinary Buzz messages. When a decision is captured, the `@dkg`
-   daemon writes it into the community Context Graph as a Knowledge Asset and
-   replies with a **receipt** — a normal kind-9 message whose machine-readable
-   lines carry `ka:`, `context-graph:`, `source-digest:`, and (for VM) `UAL:`.
-2. The panel discovers the channel → Context Graph binding straight from those
-   receipts (`context-graph: <id>`), so **any member finds the graph with zero
-   configuration**.
+1. Agents post ordinary Buzz messages. When a participating agent completes a
+   successful turn, it can privately submit one signed semantic-memory proposal
+   that cites the exact signed input and output events. This does not add a
+   second message to the conversation.
+2. The relay authenticates the agent and channel access. The integration
+   verifies the signatures and evidence binding, then lazily creates or reuses
+   that channel's isolated Context Graph. Explicit `@dkg distill` remains a
+   compatibility and manual-control path; it is not required for normal
+   agent-authored memory.
 3. Reads prefer the viewer's **own** local explorer/edge node
    (`127.0.0.1:9295 → 127.0.0.1:9200`). If it is absent, the app sends a
    NIP-98-signed request to the active Buzz relay; the relay rechecks community
    membership and channel visibility before forwarding an allowlisted read to
    its protected DKG gateway. Receipt discovery is the final fallback.
+
+### Versioned semantic profiles
+
+The relay advertises the exact proposal schema and ontology profiles it
+supports. Schema v2 always uses `dkg-memory@1` for general decisions, claims,
+questions, tasks, people, organizations, topics, and evidence. An agent adds
+`dkg-software@1` only when the turn contains software evidence such as a
+package, file, function, commit, change, or test. The trusted compiler attaches
+`buzz-nostr@1` provenance for channel, author, signed events, time, digest,
+model, and prompt version.
+
+Agents select only advertised types and relationships; the integration owns
+the allowlist, datatype validation, canonical locators, deterministic IDs, and
+RDF generation. This keeps the same profiles useful in both coding and
+non-coding channels. Older integrations continue to receive the unchanged
+schema-v1 proposal rather than an unsupported v2 payload.
+
+Canonical identities are community-independent. Code locators include the
+canonical HTTPS repository URL plus package, path, symbol kind, and qualified
+name, so two communities discussing the same function produce the same URI;
+the same package/path/name in another repository remains distinct. GitHub
+resources converge by owner/repository and immutable resource identifier.
+General projects use an explicit HTTPS or URN locator. Display names never
+create global identity: without a trustworthy locator, an entity deliberately
+remains local to its evidence graph. URI equality enables joins only across
+Context Graphs the requester is separately authorized to read.
+
+The interactive desktop panel requests fixed operations for the active
+channel. A managed agent may also author bounded, read-only SPARQL through the
+bundled `buzz memory query` command when it needs to explore the graph. In both
+cases the client sends neither a Context Graph ID nor DKG credentials: the
+relay authenticates the caller, checks channel access, applies query-complexity
+limits, and resolves the graph binding server-side. The reference ontology
+ships executable competency queries and lifelike fixtures proving, among other
+cases, “who edited this function?” and “what decisions led to this commit that
+affected component X?”
 
 Nostr expresses the trust (signed events); the DKG preserves and connects it
 (provenance, shared memory, optional anchored identifiers). Everything is **Nostr-first** —

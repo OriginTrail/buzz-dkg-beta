@@ -16,6 +16,13 @@ const versionScript = read("desktop/scripts/set-dkg-beta-version.mjs");
 const workflow = read(".github/workflows/dkg-beta-desktop.yml");
 const desktopGuide = read("docs/dkg-beta-desktop.md");
 const betaEnv = read("desktop/.env.dkg-beta");
+const acp = read("crates/buzz-acp/src/lib.rs");
+const cliMemory = read("crates/buzz-cli/src/commands/memory.rs");
+const coreKinds = read("crates/buzz-core/src/kind.rs");
+const relayMemory = read("crates/buzz-relay/src/api/dkg_memory.rs");
+const commandDiscovery = read(
+  "desktop/src-tauri/src/managed_agents/discovery.rs",
+);
 
 function check(condition, message) {
   if (!condition) throw new Error(`DKG beta build contract: ${message}`);
@@ -34,8 +41,8 @@ check(
   "bundle identifier must differ from production Buzz",
 );
 check(
-  config.build?.beforeBuildCommand === "./scripts/build-dkg-beta-frontend.sh",
-  "the beta-specific frontend build must be used",
+  config.build?.beforeBuildCommand === "pnpm build:dkg-beta",
+  "the cross-platform beta-specific frontend build must be used",
 );
 check(
   config.bundle?.macOS?.infoPlist === "Info.dkg-beta.plist",
@@ -59,8 +66,9 @@ check(
   "package.json must expose the beta frontend build",
 );
 check(
-  frontendBuildScript.includes("vite build --mode dkg-beta"),
-  "the Tauri frontend hook must load the beta build mode",
+  frontendBuildScript.includes("vite build --mode dkg-beta") &&
+    packageJson.scripts?.["build:dkg-beta"]?.includes("vite build --mode dkg-beta"),
+  "the beta frontend build must load the dkg-beta mode",
 );
 check(
   betaEnv.includes("VITE_BUZZ_DKG_BETA=true"),
@@ -81,7 +89,7 @@ check(
   "the beta build must never explicitly enable system-keyring",
 );
 for (const [platform, script, bundle] of [
-  ["macOS", macosBuildScript, "--bundles dmg"],
+  ["macOS", macosBuildScript, "--bundles app,dmg"],
   ["Linux", linuxBuildScript, "--bundles deb,appimage"],
   ["Windows", windowsBuildScript, "--bundles nsis"],
 ]) {
@@ -117,6 +125,27 @@ check(
     desktopGuide.includes("desktop Secret Service") &&
     desktopGuide.includes("Keychain-free"),
   "the desktop guide must disclose each platform's credential storage",
+);
+check(
+  acp.includes("buzz memory propose") &&
+    acp.includes("nip11_dkg_memory_schema"),
+  "managed agents must receive the capability-gated DKG memory proposal instructions",
+);
+check(
+  cliMemory.includes("pub async fn dispatch") &&
+    cliMemory.includes("/api/dkg/memory"),
+  "the bundled Buzz CLI must implement authenticated DKG memory proposals",
+);
+check(
+  coreKinds.includes("KIND_DKG_MEMORY_PROPOSAL") &&
+    relayMemory.includes("pub async fn propose"),
+  "the relay must recognize and accept DKG memory proposal events",
+);
+check(
+  commandDiscovery.indexOf("let mut dirs = std::env::current_exe()") >= 0 &&
+    commandDiscovery.indexOf("let mut dirs = std::env::current_exe()") <
+      commandDiscovery.indexOf("dirs.extend(profile_target_dirs(&workspace_root_dir()))"),
+  "the running app bundle must win over compile-time workspace sidecars",
 );
 
 console.log("Buzz DKG Beta build contract is valid.");
