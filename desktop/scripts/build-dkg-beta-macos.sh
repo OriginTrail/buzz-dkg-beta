@@ -10,6 +10,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
 HOST_TARGET=$(rustc -vV | sed -n 's|host: ||p')
 TARGET=${1:-$HOST_TARGET}
+TAURI_CONFIG=${BUZZ_DKG_BETA_TAURI_CONFIG:-src-tauri/tauri.dkg-beta.conf.json}
 
 if [[ -z "$HOST_TARGET" ]]; then
   echo "Unable to determine the Rust host target." >&2
@@ -51,7 +52,7 @@ TAURI_BUNDLER_DMG_IGNORE_CI="${TAURI_BUNDLER_DMG_IGNORE_CI:-true}" \
   --no-sign \
   --target "$TARGET" \
   --bundles app,dmg \
-  --config src-tauri/tauri.dkg-beta.conf.json \
+  --config "$TAURI_CONFIG" \
   -- \
   --no-default-features
 BUILD_STATUS=$?
@@ -65,12 +66,26 @@ if [[ ! -d "$APP" || ! "$APP" -nt "$BUILD_MARKER" ]]; then
 fi
 
 VERSION=$(node -e \
-  'const fs = require("fs"); process.stdout.write(JSON.parse(fs.readFileSync("src-tauri/tauri.dkg-beta.conf.json", "utf8")).version)')
+  'const fs = require("fs"); process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).version)' \
+  "$TAURI_CONFIG")
 ZIP_DIR="$BUNDLE_ROOT/zip"
 ZIP="$ZIP_DIR/Buzz DKG Beta_${VERSION}_${ARCH}.zip"
 mkdir -p "$ZIP_DIR"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 echo "==> App ZIP: $REPO_ROOT/desktop/$ZIP"
+
+UPDATER_ARCHIVE=$(find "$BUNDLE_ROOT/macos" -name '*.app.tar.gz' -type f | head -1 || true)
+if [[ -n "$UPDATER_ARCHIVE" ]]; then
+  UPDATER_SIG="${UPDATER_ARCHIVE}.sig"
+  if [[ ! -f "$UPDATER_SIG" ]]; then
+    echo "Updater archive was produced without a signature: $UPDATER_ARCHIVE" >&2
+    exit 1
+  fi
+  RENAMED_ARCHIVE="$BUNDLE_ROOT/macos/Buzz-DKG-Beta_${VERSION}_${ARCH}.app.tar.gz"
+  mv "$UPDATER_ARCHIVE" "$RENAMED_ARCHIVE"
+  mv "$UPDATER_SIG" "${RENAMED_ARCHIVE}.sig"
+  echo "==> Updater archive: $REPO_ROOT/desktop/$RENAMED_ARCHIVE"
+fi
 
 if [[ "$BUILD_STATUS" -ne 0 ]]; then
   echo "DMG packaging was unavailable, but the fresh app ZIP is ready." >&2
