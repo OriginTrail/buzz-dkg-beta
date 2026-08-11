@@ -18,6 +18,9 @@ fail() { echo "::error::$*" >&2; exit 1; }
 command -v gh >/dev/null || fail "gh is required"
 command -v jq >/dev/null || fail "jq is required"
 command -v node >/dev/null || fail "node is required"
+command -v minisign >/dev/null || fail "minisign is required"
+[[ -n "${BUZZ_UPDATER_PUBLIC_KEY:-}" ]] || \
+  fail "BUZZ_UPDATER_PUBLIC_KEY is required"
 
 ASSET_MODEL="$(node desktop/scripts/dkg-beta-assets.mjs "$VERSION")"
 EXPECTED_PLATFORMS="$(jq -c '.platforms | keys' <<<"$ASSET_MODEL")"
@@ -73,6 +76,35 @@ while IFS= read -r url; do
   grep -Fxq "$asset" <<<"$release_assets" || \
     fail "$CANDIDATE references missing release asset: $asset"
 done < <(jq -r '.platforms[].url' "$candidate")
+
+asset_dir="$workdir/release-assets"
+mkdir -p "$asset_dir"
+while IFS= read -r platform; do
+  archive="$(jq -r --arg platform "$platform" \
+    '.platforms[$platform].updaterArchive' <<<"$ASSET_MODEL")"
+  signature_asset="${archive}.sig"
+  grep -Fxq "$archive" <<<"$release_assets" || \
+    fail "$TAG has no updater archive for $platform: $archive"
+  grep -Fxq "$signature_asset" <<<"$release_assets" || \
+    fail "$TAG has no updater signature for $platform: $signature_asset"
+
+  gh release download "$TAG" \
+    --repo "$REPOSITORY" \
+    --pattern "$archive" \
+    --pattern "$signature_asset" \
+    --dir "$asset_dir"
+
+  manifest_signature="$(jq -r --arg platform "$platform" \
+    '.platforms[$platform].signature' "$candidate")"
+  published_signature="$(cat "$asset_dir/$signature_asset")"
+  [[ "$manifest_signature" == "$published_signature" ]] || \
+    fail "$CANDIDATE signature does not match $signature_asset for $platform"
+
+  minisign -V -m "$asset_dir/$archive" \
+    -P "$BUZZ_UPDATER_PUBLIC_KEY" \
+    -x "$asset_dir/$signature_asset" >/dev/null || \
+    fail "$signature_asset does not verify $archive for $platform"
+done < <(jq -r '.[]' <<<"$EXPECTED_PLATFORMS")
 
 if ! gh release view "$ROLLING_TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
   gh release create "$ROLLING_TAG" \
