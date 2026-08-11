@@ -10,6 +10,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
 HOST_TARGET=$(rustc -vV | sed -n 's|host: ||p')
 TARGET=${1:-$HOST_TARGET}
+TAURI_CONFIG=${BUZZ_DKG_BETA_TAURI_CONFIG:-src-tauri/tauri.dkg-beta.conf.json}
 
 case "$TARGET" in
   x86_64-unknown-linux-gnu) ;;
@@ -39,7 +40,7 @@ CMAKE_POLICY_VERSION_MINIMUM="${CMAKE_POLICY_VERSION_MINIMUM:-3.5}" \
   --ci \
   --target "$TARGET" \
   --bundles deb,appimage \
-  --config src-tauri/tauri.dkg-beta.conf.json
+  --config "$TAURI_CONFIG"
 
 BUNDLE_ROOT="src-tauri/target/${TARGET}/release/bundle"
 echo "==> Debian package: $REPO_ROOT/desktop/$BUNDLE_ROOT/deb"

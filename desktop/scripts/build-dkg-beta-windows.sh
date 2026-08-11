@@ -12,6 +12,7 @@ esac
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
 TARGET=${1:-x86_64-pc-windows-msvc}
+TAURI_CONFIG=${BUZZ_DKG_BETA_TAURI_CONFIG:-src-tauri/tauri.dkg-beta.conf.json}
 
 if [[ "$TARGET" != "x86_64-pc-windows-msvc" ]]; then
   echo "Unsupported Windows beta target: $TARGET" >&2
@@ -36,7 +37,7 @@ CMAKE_POLICY_VERSION_MINIMUM="${CMAKE_POLICY_VERSION_MINIMUM:-3.5}" \
   --verbose \
   --target "$TARGET" \
   --bundles nsis \
-  --config src-tauri/tauri.dkg-beta.conf.json
+  --config "$TAURI_CONFIG"
 
 BUNDLE_ROOT="src-tauri/target/${TARGET}/release/bundle"
 echo "==> NSIS installer: $REPO_ROOT/desktop/$BUNDLE_ROOT/nsis"

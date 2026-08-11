@@ -11,6 +11,7 @@ fi
 
 VERSION="$1"
 shift
+UPDATER_NOTES=${UPDATER_NOTES:-Buzz v$VERSION}
 
 # Build the jq `platforms` object from N triples. Each triple is
 # `platform-key:sig-file:archive-url`; archive URLs contain colons, so split
@@ -38,7 +39,7 @@ done
 
 jq -n \
   --arg version "$VERSION" \
-  --arg notes "Buzz v$VERSION" \
+  --arg notes "$UPDATER_NOTES" \
   --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   "${platform_args[@]}" \
   "{ version: \$version, notes: \$notes, pub_date: \$pub_date, platforms: ($platforms_obj) }"

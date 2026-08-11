@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Semver without the leading v
+        description: Beta semver without the leading v
         required: true
-        default: 0.5.7-dkg-beta.3
+        default: 0.5.7-dkg-beta.4
         type: string
       publish:
         description: Publish all successful packages as a GitHub prerelease
@@ -20,6 +20,9 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  BUZZ_UPDATER_ENDPOINT: https://github.com/OriginTrail/buzz-dkg-beta/releases/download/buzz-dkg-beta-latest/latest.json
 
 jobs:
   validate:
@@ -41,9 +44,21 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dkg-beta\.[0-9]+$ ]] || {
+            echo "::error::Version must match X.Y.Z-dkg-beta.N"
+            exit 1
+          }
           cd desktop
           node scripts/set-dkg-beta-version.mjs "$VERSION"
           pnpm check:dkg-beta
+
+      - name: Validate updater signing configuration
+        env:
+          UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY }}
+          UPDATER_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          [[ -n "$UPDATER_PUBLIC_KEY" ]] || { echo "::error::BUZZ_UPDATER_PUBLIC_KEY is not configured"; exit 1; }
+          [[ -n "$UPDATER_PRIVATE_KEY" ]] || { echo "::error::TAURI_SIGNING_PRIVATE_KEY is not configured"; exit 1; }
 
   macos:
     name: macOS ${{ matrix.arch }}
@@ -86,10 +101,19 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
 
+      - name: Generate updater-enabled beta config
+        run: cd desktop && node scripts/build-dkg-beta-release-config.mjs
+        env:
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY }}
+
       - name: Build unsigned keychain-free packages
         run: desktop/scripts/build-dkg-beta-macos.sh "$TARGET"
         env:
           TARGET: ${{ matrix.target }}
+          BUZZ_DKG_BETA_TAURI_CONFIG: src-tauri/tauri.dkg-beta.release.conf.json
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Validate macOS packages
         run: |
@@ -97,6 +121,11 @@ jobs:
           BUNDLE_ROOT="desktop/src-tauri/target/${TARGET}/release/bundle"
           ZIP=$(find "$BUNDLE_ROOT/zip" -name '*.zip' -type f | head -1)
           [[ -n "$ZIP" ]] || { echo "::error::No macOS ZIP found"; exit 1; }
+          ARCHIVE=$(find "$BUNDLE_ROOT/macos" -name '*.app.tar.gz' -type f | head -1)
+          [[ -n "$ARCHIVE" && -f "${ARCHIVE}.sig" ]] || {
+            echo "::error::No signed macOS updater archive found"
+            exit 1
+          }
           DMG=$(find "$BUNDLE_ROOT/dmg" -name '*.dmg' -type f | head -1 || true)
           if [[ -z "$DMG" ]]; then
             echo "::warning::No DMG was produced; publishing the ZIP fallback"
@@ -111,6 +140,8 @@ jobs:
           path: |
             desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
             desktop/src-tauri/target/${{ matrix.target }}/release/bundle/zip/*.zip
+            desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
           if-no-files-found: error
           retention-days: 14
 
@@ -170,8 +201,18 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
 
+      - name: Generate updater-enabled beta config
+        run: cd desktop && node scripts/build-dkg-beta-release-config.mjs
+        env:
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY }}
+
       - name: Build Linux packages
         run: desktop/scripts/build-dkg-beta-linux.sh "$TARGET"
+        env:
+          BUZZ_DKG_BETA_TAURI_CONFIG: src-tauri/tauri.dkg-beta.release.conf.json
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Fix AppImage portability
         run: |
@@ -182,6 +223,9 @@ jobs:
             exit 1
           }
           bash desktop/scripts/fix-appimage.sh "${APPIMAGES[0]}"
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Validate Linux packages
         run: |
@@ -191,6 +235,13 @@ jobs:
           APPIMAGE=$(find "$BUNDLE_ROOT/appimage" -name '*.AppImage' -type f | head -1)
           [[ -n "$DEB" ]] || { echo "::error::No Debian package found"; exit 1; }
           [[ -n "$APPIMAGE" ]] || { echo "::error::No AppImage found"; exit 1; }
+          [[ -f "${APPIMAGE}.sig" ]] || { echo "::error::No AppImage updater signature found"; exit 1; }
+          ASSET_NAME=$(node desktop/scripts/dkg-beta-assets.mjs "$VERSION" --asset linux-x86_64)
+          RENAMED="$BUNDLE_ROOT/appimage/$ASSET_NAME"
+          mv "$APPIMAGE" "$RENAMED"
+          mv "${APPIMAGE}.sig" "${RENAMED}.sig"
+        env:
+          VERSION: ${{ inputs.version }}
 
       - name: Upload Linux packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -199,6 +250,7 @@ jobs:
           path: |
             desktop/src-tauri/target/${{ env.TARGET }}/release/bundle/deb/*.deb
             desktop/src-tauri/target/${{ env.TARGET }}/release/bundle/appimage/*.AppImage
+            desktop/src-tauri/target/${{ env.TARGET }}/release/bundle/appimage/*.AppImage.sig
           if-no-files-found: error
           retention-days: 14
 
@@ -237,9 +289,20 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
 
+      - name: Generate updater-enabled beta config
+        shell: bash
+        run: cd desktop && node scripts/build-dkg-beta-release-config.mjs
+        env:
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY }}
+
       - name: Build Windows installer
         shell: bash
         run: desktop/scripts/build-dkg-beta-windows.sh "$TARGET"
+        env:
+          BUZZ_DKG_BETA_TAURI_CONFIG: src-tauri/tauri.dkg-beta.release.conf.json
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Validate Windows installer
         shell: bash
@@ -248,12 +311,21 @@ jobs:
           BUNDLE_ROOT="desktop/src-tauri/target/${TARGET}/release/bundle"
           EXE=$(find "$BUNDLE_ROOT/nsis" -name '*.exe' -type f | head -1)
           [[ -n "$EXE" ]] || { echo "::error::No NSIS installer found"; exit 1; }
+          [[ -f "${EXE}.sig" ]] || { echo "::error::No NSIS updater signature found"; exit 1; }
+          ASSET_NAME=$(node desktop/scripts/dkg-beta-assets.mjs "$VERSION" --asset windows-x86_64)
+          RENAMED="$BUNDLE_ROOT/nsis/$ASSET_NAME"
+          mv "$EXE" "$RENAMED"
+          mv "${EXE}.sig" "${RENAMED}.sig"
+        env:
+          VERSION: ${{ inputs.version }}
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: buzz-dkg-beta-windows-x86_64
-          path: desktop/src-tauri/target/${{ env.TARGET }}/release/bundle/nsis/*.exe
+          path: |
+            desktop/src-tauri/target/${{ env.TARGET }}/release/bundle/nsis/*.exe
+            desktop/src-tauri/target/${{ env.TARGET }}/release/bundle/nsis/*.exe.sig
           if-no-files-found: error
           retention-days: 14
 
@@ -279,7 +351,7 @@ jobs:
           pattern: buzz-dkg-beta-*
           path: staged-by-platform
 
-      - name: Flatten and checksum packages
+      - name: Flatten packages
         run: |
           set -euo pipefail
           mkdir dist
@@ -295,6 +367,37 @@ jobs:
             echo "::error::Expected packages for all desktop platforms"
             exit 1
           }
+
+      - name: Generate signed updater candidate
+        run: |
+          set -euo pipefail
+          ASSET_MODEL=$(node desktop/scripts/dkg-beta-assets.mjs "$VERSION")
+          MAC_ARM="dist/$(jq -r '.platforms["darwin-aarch64"].updaterArchive' <<<"$ASSET_MODEL")"
+          MAC_X64="dist/$(jq -r '.platforms["darwin-x86_64"].updaterArchive' <<<"$ASSET_MODEL")"
+          LINUX="dist/$(jq -r '.platforms["linux-x86_64"].updaterArchive' <<<"$ASSET_MODEL")"
+          WINDOWS="dist/$(jq -r '.platforms["windows-x86_64"].updaterArchive' <<<"$ASSET_MODEL")"
+          for archive in "$MAC_ARM" "$MAC_X64" "$LINUX" "$WINDOWS"; do
+            [[ -f "$archive" ]] || { echo "::error::Missing updater archive: $archive"; exit 1; }
+            [[ -f "${archive}.sig" ]] || { echo "::error::Missing updater signature: ${archive}.sig"; exit 1; }
+          done
+
+          BASE="https://github.com/OriginTrail/buzz-dkg-beta/releases/download/v${VERSION}"
+          UPDATER_NOTES="Buzz DKG Beta ${VERSION}" \
+            bash desktop/scripts/generate-oss-latest-json.sh "$VERSION" \
+              "darwin-aarch64:${MAC_ARM}.sig:${BASE}/$(basename "$MAC_ARM")" \
+              "darwin-x86_64:${MAC_X64}.sig:${BASE}/$(basename "$MAC_X64")" \
+              "linux-x86_64:${LINUX}.sig:${BASE}/$(basename "$LINUX")" \
+              "windows-x86_64:${WINDOWS}.sig:${BASE}/$(basename "$WINDOWS")" \
+              > dist/updater-manifest.json
+
+          jq -e --arg version "$VERSION" '
+            .version == $version and
+            (.platforms | keys == ["darwin-aarch64", "darwin-x86_64", "linux-x86_64", "windows-x86_64"])
+          ' dist/updater-manifest.json >/dev/null
+
+      - name: Checksum complete release
+        run: |
+          set -euo pipefail
           cd dist
           find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
             | sort -z \
@@ -323,7 +426,7 @@ jobs:
               --latest=false \
               --target "$GITHUB_SHA" \
               --title "Buzz DKG Beta ${VERSION}" \
-              --notes "Unsigned cross-platform beta for testing authenticated OriginTrail DKG community memory. macOS builds are Keychain-free; Windows and Linux use their native credential stores."
+              --notes "Cross-platform beta for authenticated OriginTrail DKG community memory. Update bundles carry mandatory Tauri signatures; the macOS and Windows packages remain unsigned by Apple and Microsoft."
           fi
 
       - name: Upload complete package set
