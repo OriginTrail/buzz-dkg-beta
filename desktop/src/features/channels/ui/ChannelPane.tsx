@@ -22,7 +22,6 @@ import {
   getDmHuddleMemberPubkeys,
   hasOtherDmParticipant,
 } from "@/features/channels/lib/dmHuddleMembers";
-import { buildVideoReviewContextsByMessageId } from "@/features/messages/lib/videoReviewContext";
 import { useComposerHeightPadding } from "@/features/messages/ui/useComposerHeightPadding";
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
 import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
@@ -58,6 +57,7 @@ import type { ChannelPaneProps } from "@/features/channels/ui/ChannelPane.types"
 import * as agentSessionSelection from "@/features/channels/ui/agentSessionSelection";
 import { usePrepareDmSendChannel } from "@/features/channels/ui/usePrepareDmSendChannel";
 import { useChannelPaneMessages } from "@/features/channels/ui/useChannelPaneMessages";
+import { useThreadVideoReviewContexts } from "@/features/channels/ui/useThreadVideoReviewContexts";
 import { Button } from "@/shared/ui/button";
 import { useRenderScopedReactionHydration } from "@/features/messages/lib/useRenderScopedReactionHydration";
 import type { TimelineMessage } from "@/features/messages/types";
@@ -457,16 +457,11 @@ export const ChannelPane = React.memo(function ChannelPane({
     profiles,
     threadSummaries,
   });
-  const memoryMessages = React.useMemo(() => {
-    const byId = new Map<string, TimelineMessage>();
-    for (const message of messages) byId.set(message.id, message);
-    if (threadHeadMessage) byId.set(threadHeadMessage.id, threadHeadMessage);
-    for (const message of threadAllMessages) byId.set(message.id, message);
-    return [...byId.values()];
-  }, [messages, threadAllMessages, threadHeadMessage]);
   const messageBodyAdornments = useDkgMemoryMessageAdornments(
     activeChannelId,
-    memoryMessages,
+    messages,
+    threadHeadMessage,
+    threadAllMessages,
   );
   useRenderScopedReactionHydration({
     activeChannel,
@@ -474,40 +469,16 @@ export const ChannelPane = React.memo(function ChannelPane({
     threadHeadMessage,
     threadMessages,
   });
-  const activeVideoReviewCommentSender = activeChannel?.archivedAt
-    ? undefined
-    : onSendVideoReviewComment;
-  const threadVideoReviewContextsByMessageId = React.useMemo(() => {
-    const messagesById = new Map(
-      messages.map((message) => [message.id, message]),
-    );
-    if (threadHeadMessage) {
-      messagesById.set(threadHeadMessage.id, threadHeadMessage);
-    }
-    for (const message of threadAllMessages) {
-      messagesById.set(message.id, message);
-    }
-
-    return buildVideoReviewContextsByMessageId({
-      channelId: activeChannel?.id ?? null,
-      channelName: activeChannel?.name,
-      channelType: activeChannel?.channelType ?? null,
-      isSendingVideoReviewComment: isSending,
-      messages: [...messagesById.values()],
-      onSendVideoReviewComment: activeVideoReviewCommentSender,
-      onToggleReaction,
-      profiles,
-    });
-  }, [
+  const threadVideoReviewContextsByMessageId = useThreadVideoReviewContexts({
     activeChannel,
-    activeVideoReviewCommentSender,
     isSending,
     messages,
+    onSendVideoReviewComment,
     onToggleReaction,
     profiles,
     threadAllMessages,
     threadHeadMessage,
-  ]);
+  });
 
   const isOverlay = useIsThreadPanelOverlay();
   const useSplitAuxiliaryPane = !isSinglePanelView && !isOverlay;
