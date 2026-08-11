@@ -116,6 +116,13 @@ check(
   !macosBuildScript.includes("--features system-keyring"),
   "the beta build must never explicitly enable system-keyring",
 );
+check(
+  macosBuildScript.includes("--no-sign") &&
+    macosBuildScript.includes(
+      './node_modules/.bin/tauri signer sign "$UPDATER_ARCHIVE"',
+    ),
+  "the unsigned macOS app build must explicitly sign its updater archive",
+);
 for (const [platform, script, bundle] of [
   ["macOS", macosBuildScript, "--bundles app,dmg"],
   ["Linux", linuxBuildScript, "--bundles deb,appimage"],
