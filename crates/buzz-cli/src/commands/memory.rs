@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::future::Future;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use nostr::{EventBuilder, Kind, Tag};
@@ -386,9 +387,30 @@ enum ProposalProgress {
     Unknown,
 }
 
-/// Normalize the integration's internal lifecycle phases into the two states
-/// an agent can act on. Older beta relays exposed `distilled`/`wm_written`/
-/// `finalized`/`shared`; none of those means the graph is queryable yet.
+#[derive(serde::Deserialize)]
+struct ProposalStateContract {
+    stored: Vec<String>,
+    processing: Vec<String>,
+}
+
+fn proposal_state_contract() -> Result<&'static ProposalStateContract, CliError> {
+    static CONTRACT: OnceLock<Result<ProposalStateContract, String>> = OnceLock::new();
+    CONTRACT
+        .get_or_init(|| {
+            serde_json::from_str(include_str!(
+                "../../../../shared/dkg-memory/proposal-states.json"
+            ))
+            .map_err(|error| error.to_string())
+        })
+        .as_ref()
+        .map_err(|error| {
+            CliError::Other(format!("DKG memory lifecycle contract is invalid: {error}"))
+        })
+}
+
+/// Normalize beta relay phases through the same checked-in compatibility
+/// contract used by the desktop. The public `state` is actionable; a raw beta
+/// phase is retained separately as `internalState` for diagnostics.
 fn normalize_proposal_response(response: &str) -> Result<(String, ProposalProgress), CliError> {
     let mut value: serde_json::Value = serde_json::from_str(response).map_err(|error| {
         CliError::Other(format!("memory proposal returned invalid JSON: {error}"))
@@ -396,15 +418,22 @@ fn normalize_proposal_response(response: &str) -> Result<(String, ProposalProgre
     let state = value
         .get("state")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
-    let (external, progress) = match state {
-        "stored" | "receipted" => (Some("stored"), ProposalProgress::Stored),
-        "processing" | "distilled" | "wm_written" | "finalized" | "shared" => {
-            (Some("processing"), ProposalProgress::Processing)
-        }
-        _ => (None, ProposalProgress::Unknown),
+        .unwrap_or("")
+        .to_string();
+    let contract = proposal_state_contract()?;
+    let (external, progress) = if contract.stored.iter().any(|entry| entry == &state) {
+        (Some("stored"), ProposalProgress::Stored)
+    } else if contract.processing.iter().any(|entry| entry == &state) {
+        (Some("processing"), ProposalProgress::Processing)
+    } else {
+        (None, ProposalProgress::Unknown)
     };
     if let (Some(external), Some(object)) = (external, value.as_object_mut()) {
+        if state != external {
+            object
+                .entry("internalState".to_string())
+                .or_insert_with(|| serde_json::Value::String(state.clone()));
+        }
         object.insert(
             "state".to_string(),
             serde_json::Value::String(external.to_string()),
@@ -500,6 +529,13 @@ mod tests {
     }
 
     #[test]
+    fn checked_in_proposal_state_contract_covers_beta_states() {
+        let contract = proposal_state_contract().unwrap();
+        assert!(contract.processing.iter().any(|state| state == "distilled"));
+        assert!(contract.stored.iter().any(|state| state == "receipted"));
+    }
+
+    #[test]
     fn proposal_status_hides_internal_phases_until_storage_is_queryable() {
         let (processing, progress) =
             normalize_proposal_response(r#"{"ok":true,"outcome":"accepted","state":"distilled"}"#)
@@ -509,6 +545,10 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&processing).unwrap()["state"],
             "processing"
         );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&processing).unwrap()["internalState"],
+            "distilled"
+        );
 
         let (stored, progress) =
             normalize_proposal_response(r#"{"ok":true,"outcome":"duplicate","state":"receipted"}"#)
@@ -517,6 +557,10 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&stored).unwrap()["state"],
             "stored"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&stored).unwrap()["internalState"],
+            "receipted"
         );
     }
 
@@ -530,7 +574,9 @@ mod tests {
         )
         .await;
         assert_eq!(refreshes + 1, 2, "initial post plus one refresh");
-        assert_eq!(stored.response, r#"{"state":"stored"}"#);
+        let stored_response = serde_json::from_str::<serde_json::Value>(&stored.response).unwrap();
+        assert_eq!(stored_response["state"], "stored");
+        assert_eq!(stored_response["internalState"], "receipted");
         assert!(stored.refresh_error.is_none());
 
         let (immediate, refreshes) = test_poll(
@@ -541,7 +587,10 @@ mod tests {
         )
         .await;
         assert_eq!(refreshes, 0);
-        assert_eq!(immediate.response, r#"{"state":"processing"}"#);
+        let immediate_response =
+            serde_json::from_str::<serde_json::Value>(&immediate.response).unwrap();
+        assert_eq!(immediate_response["state"], "processing");
+        assert_eq!(immediate_response["internalState"], "distilled");
 
         let (timed_out, refreshes) = test_poll(
             r#"{"state":"processing"}"#,

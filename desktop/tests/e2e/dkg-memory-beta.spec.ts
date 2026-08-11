@@ -7,6 +7,28 @@ const AGENT_PUBKEY = "f".repeat(64);
 const AGENT_MESSAGE_ID = `mock-agents-managed-${AGENT_PUBKEY.slice(0, 8)}`;
 const AGENTS_CHANNEL_ID = "94a444a4-c0a3-5966-ab05-530c6ddc2301";
 
+async function advertiseDkgMemory(page: import("@playwright/test").Page) {
+  await page.route("http://localhost:3000/**", (route) => {
+    return route.fulfill({
+      status: 200,
+      contentType: "application/nostr+json",
+      headers: { "Access-Control-Allow-Origin": "*" },
+      body: JSON.stringify({
+        supported_extensions: ["buzz-dkg-memory-v2"],
+        dkg_memory: {
+          profiles: ["dkg-memory@1"],
+          query_operations: ["channel_memory", "semantic_query"],
+          schema_versions: [2],
+          semantic_query: {
+            scopes: ["current_channel"],
+            forms: ["select", "ask", "construct"],
+          },
+        },
+      }),
+    });
+  });
+}
+
 test("channel memory exposes graph and authenticated search without named subgraphs", async ({
   page,
 }) => {
@@ -18,7 +40,15 @@ test("channel memory exposes graph and authenticated search without named subgra
       contentType: "application/nostr+json",
       body: JSON.stringify({
         supported_extensions: ["buzz-dkg-memory-v2"],
-        dkg_memory: { query_operations: ["channel_memory", "semantic_query"] },
+        dkg_memory: {
+          profiles: ["dkg-memory@1"],
+          query_operations: ["channel_memory", "semantic_query"],
+          schema_versions: [2],
+          semantic_query: {
+            scopes: ["current_channel"],
+            forms: ["select", "ask", "construct"],
+          },
+        },
       }),
     });
   });
@@ -309,7 +339,10 @@ test("failed provisioning leaves a request, never a false enabled claim", async 
   await expect(page.getByText(/DKG memory was enabled/i)).toHaveCount(0);
 });
 
-test("an agent response shows when its memory is stored", async ({ page }) => {
+test("an agent response shows stored memory in the timeline and thread panel", async ({
+  page,
+}) => {
+  await advertiseDkgMemory(page);
   await installMockBridge(page, {
     managedAgents: [
       {
@@ -369,13 +402,129 @@ test("an agent response shows when its memory is stored", async ({ page }) => {
   );
 
   const fizzMessage = page
+    .getByTestId("message-timeline")
     .getByTestId("message-row")
     .filter({ hasText: "Fizz reporting in." });
   await expect(fizzMessage.getByTestId("dkg-message-stored")).toHaveText(
+    "Stored in channel memory",
+  );
+
+  await page.waitForFunction(
+    () =>
+      window.__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+        channelName: "agents",
+      }) === true,
+  );
+  await page.evaluate((parentEventId) => {
+    const emit = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+    if (!emit) throw new Error("Mock message emitter is unavailable");
+    emit({
+      channelName: "agents",
+      content: "Reply that opens the memory-status thread.",
+      parentEventId,
+    });
+  }, AGENT_MESSAGE_ID);
+  const threadSummary = page.locator(
+    `[data-testid="message-thread-summary"][data-thread-head-id="${AGENT_MESSAGE_ID}"]`,
+  );
+  await expect(threadSummary).toBeVisible();
+  await threadSummary.click();
+  const threadHead = page
+    .getByTestId("message-thread-panel")
+    .getByTestId("message-thread-head");
+  await expect(threadHead.getByTestId("dkg-message-stored")).toHaveText(
     "Stored in channel memory",
   );
   await waitForAnimations(page);
   await fizzMessage.screenshot({
     path: "test-results/dkg-memory-beta/message-stored.png",
   });
+});
+
+test("a failed memory badge retries the exact agent response", async ({
+  page,
+}) => {
+  await advertiseDkgMemory(page);
+  await installMockBridge(page, {
+    managedAgents: [
+      {
+        pubkey: AGENT_PUBKEY,
+        name: "Fizz",
+        status: "running",
+        channelNames: ["agents"],
+      },
+    ],
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(
+    () => typeof window.__BUZZ_E2E_SEED_OBSERVER_EVENTS__ === "function",
+  );
+  await page.getByTestId("channel-agents").click();
+  await expect(page.getByText("Fizz reporting in.")).toBeVisible();
+
+  await page.evaluate(
+    ({ agentPubkey, channelId, messageId }) => {
+      window.__BUZZ_E2E_SEED_OBSERVER_EVENTS__?.({
+        agentPubkey,
+        events: [
+          {
+            seq: 2,
+            timestamp: "2026-08-11T10:01:00Z",
+            kind: "acp_read",
+            agentIndex: 0,
+            channelId,
+            sessionId: "session-memory-retry",
+            turnId: "turn-memory-retry",
+            payload: {
+              method: "session/update",
+              params: {
+                sessionId: "session-memory-retry",
+                update: {
+                  sessionUpdate: "tool_call_update",
+                  toolCallId: "memory-proposal-retry",
+                  status: "failed",
+                  title: "shell",
+                  kind: "shell",
+                  rawInput: {
+                    command: `buzz memory propose --source ${messageId}`,
+                  },
+                  rawOutput: "Blazegraph unavailable",
+                },
+              },
+            },
+          },
+        ],
+      });
+    },
+    {
+      agentPubkey: AGENT_PUBKEY,
+      channelId: AGENTS_CHANNEL_ID,
+      messageId: AGENT_MESSAGE_ID,
+    },
+  );
+
+  const fizzMessage = page
+    .getByTestId("message-row")
+    .filter({ hasText: "Fizz reporting in." });
+  const failed = fizzMessage.getByTestId("dkg-message-failed");
+  await expect(failed).toContainText("Memory was not stored");
+  await failed.getByRole("button", { name: "Retry" }).click();
+  await expect(failed).toContainText("Memory retry requested");
+
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window.__BUZZ_E2E_SIGNED_EVENTS__ ?? [])
+          .filter((event) => event.kind === 9)
+          .at(-1),
+      ),
+    )
+    .toMatchObject({
+      content: expect.stringContaining(
+        `Retry recording DKG memory for response ${AGENT_MESSAGE_ID}`,
+      ),
+      tags: expect.arrayContaining([
+        expect.arrayContaining(["p", AGENT_PUBKEY]),
+      ]),
+    });
 });

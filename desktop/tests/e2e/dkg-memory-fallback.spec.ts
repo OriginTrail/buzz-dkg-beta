@@ -80,9 +80,13 @@ test("flat capture: All-decisions lens opens the Traces timeline", async ({
 
   const overlay = page.getByTestId("dkg-graph-overlay");
   await expect(overlay.getByText("All decisions")).toBeVisible();
+  await expect(overlay.getByText("3 decisions · 0 evidence")).toBeVisible();
   await expect(overlay.getByTestId("traces-card")).toHaveCount(3, {
     timeout: 15_000,
   });
+  await expect(
+    overlay.getByRole("region", { name: "Decision traces timeline" }),
+  ).toBeVisible();
   await expect(
     overlay
       .getByTestId("traces-card")
@@ -98,6 +102,7 @@ test("named subgraph lens queries the provider and keeps Graph available", async
   page,
 }) => {
   const subgraphRequests: string[] = [];
+  const tripleRequests: string[] = [];
   await page.addInitScript((cg) => {
     window.localStorage.setItem("dkg-memory-cg-override", cg);
   }, CG);
@@ -135,6 +140,37 @@ test("named subgraph lens queries the provider and keeps Graph available", async
         },
       });
     }
+    if (url.includes("/api/subgraph-triples")) {
+      tripleRequests.push(url);
+      return route.fulfill({
+        json: {
+          gate: "ok",
+          triples: [
+            {
+              subject: FLAT_MEMORY.decisions[0].uri,
+              predicate: "http://dkg.io/ontology/decisions/affects",
+              object: "urn:component:buzz-relay",
+              layer: "SWM",
+              agent: "engineering",
+            },
+            {
+              subject: FLAT_MEMORY.decisions[0].uri,
+              predicate: "http://schema.org/name",
+              object: '"Adopt NIP-42 and NIP-98"',
+              layer: "SWM",
+              agent: "engineering",
+            },
+            {
+              subject: "urn:component:buzz-relay",
+              predicate: "http://schema.org/name",
+              object: '"Buzz relay"',
+              layer: "SWM",
+              agent: "engineering",
+            },
+          ],
+        },
+      });
+    }
     return route.fulfill({ json: { gate: "ok" } });
   });
 
@@ -150,6 +186,50 @@ test("named subgraph lens queries the provider and keeps Graph available", async
   await expect(overlay.getByTestId("dkg-topology-toggle")).toBeVisible();
   expect(subgraphRequests).toHaveLength(1);
   expect(new URL(subgraphRequests[0]).searchParams.get("name")).toBe(
+    "engineering",
+  );
+
+  await overlay.getByTestId("dkg-topology-toggle").click();
+  await expect(
+    overlay.getByRole("button", { name: "Entity types" }),
+  ).toBeVisible();
+  await expect(
+    overlay.getByRole("button", { name: "Contributors" }),
+  ).toBeVisible();
+  await expect(
+    overlay.getByText(/2 connected entities · 1 relationships/i),
+  ).toBeVisible({ timeout: 15_000 });
+  const topologyCanvas = overlay.locator("canvas").first();
+  await expect(topologyCanvas).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect
+    .poll(
+      () =>
+        topologyCanvas.evaluate((node) => {
+          const canvas = node as HTMLCanvasElement;
+          const context = canvas.getContext("2d", {
+            willReadFrequently: true,
+          });
+          if (!context || canvas.width === 0 || canvas.height === 0) return 0;
+          const pixels = context.getImageData(
+            0,
+            0,
+            canvas.width,
+            canvas.height,
+          ).data;
+          let painted = 0;
+          for (let index = 3; index < pixels.length; index += 4) {
+            if (pixels[index] > 0) painted += 1;
+            if (painted >= 10) break;
+          }
+          return painted;
+        }),
+      { timeout: 20_000 },
+    )
+    .toBeGreaterThanOrEqual(10);
+  expect(tripleRequests).toHaveLength(1);
+  expect(new URL(tripleRequests[0]).searchParams.get("name")).toBe(
     "engineering",
   );
 });

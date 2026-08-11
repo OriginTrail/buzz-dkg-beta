@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import proposalStates from "../../../../shared/dkg-memory/proposal-states.json" with {
+  type: "json",
+};
 import { memoryStatusForMessage } from "./messageStatus.ts";
+import {
+  advertisesDkgMemory,
+  advertisesDkgSemanticQuery,
+} from "./capabilities.ts";
+import { buildMessageMemoryStatusMap } from "./messageStatusMap.ts";
+import {
+  memoryProposalProgress,
+  normalizeMemoryProposalResponse,
+} from "./proposalState.ts";
 
 const CHANNEL = "channel-one";
 const MESSAGE = "a".repeat(64);
@@ -155,4 +167,132 @@ test("display text and unrelated result IDs cannot impersonate structured teleme
     ),
     "stored",
   );
+});
+
+test("the map helper suppresses badges when its capability gate is closed", () => {
+  const message = {
+    id: MESSAGE,
+    author: "Fizz",
+    isAgent: true,
+    signerPubkey: "f".repeat(64),
+  };
+  const statuses = buildMessageMemoryStatusMap(
+    CHANNEL,
+    [message],
+    false,
+    new Map(),
+  );
+  assert.equal(statuses.size, 0);
+});
+
+test("every shared beta processing phase remains an in-flight recording", () => {
+  for (const state of proposalStates.processing) {
+    assert.equal(memoryProposalProgress(state), "processing", state);
+    assert.equal(
+      memoryStatusForMessage(
+        [tool({ result: JSON.stringify({ state }) })],
+        CHANNEL,
+        MESSAGE,
+      ),
+      "recording",
+      state,
+    );
+  }
+});
+
+test("provisioning normalization preserves raw beta lifecycle phases", () => {
+  for (const state of proposalStates.processing) {
+    assert.deepEqual(normalizeMemoryProposalResponse({ state }, 202), {
+      internalState: state === "processing" ? undefined : state,
+      state: "processing",
+    });
+  }
+  assert.deepEqual(
+    normalizeMemoryProposalResponse(
+      { state: "distilled", internalState: "relay-phase" },
+      202,
+    ),
+    { internalState: "relay-phase", state: "processing" },
+  );
+});
+
+test("the channel-level map derives each agent status from one shared pass", () => {
+  const pubkey = "f".repeat(64);
+  const transcript = [tool()];
+  const statuses = buildMessageMemoryStatusMap(
+    CHANNEL,
+    [
+      {
+        id: MESSAGE,
+        author: "Fizz",
+        isAgent: true,
+        signerPubkey: pubkey,
+      },
+      {
+        id: "b".repeat(64),
+        author: "Fizz",
+        isAgent: true,
+        signerPubkey: pubkey,
+      },
+    ],
+    true,
+    new Map([[pubkey, { transcript, completedTurnIds: new Set() }]]),
+  );
+  assert.deepEqual(statuses.get(MESSAGE), {
+    agentName: "Fizz",
+    agentPubkey: pubkey,
+    status: "stored",
+  });
+  assert.strictEqual(transcript.length, 1);
+});
+
+test("relay discovery mirrors the ACP memory capability contract", () => {
+  assert.equal(
+    advertisesDkgMemory({ supported_extensions: ["buzz-dkg-memory-v2"] }),
+    false,
+  );
+  assert.equal(
+    advertisesDkgMemory({
+      supported_extensions: ["buzz-dkg-memory-v2"],
+      dkg_memory: {
+        schema_versions: [2],
+        profiles: ["dkg-memory@1"],
+      },
+    }),
+    true,
+  );
+  assert.equal(
+    advertisesDkgSemanticQuery({
+      supported_extensions: ["buzz-dkg-memory-v2"],
+      dkg_memory: {
+        schema_versions: [2],
+        profiles: ["dkg-memory@1"],
+        query_operations: ["semantic_query"],
+        semantic_query: {
+          scopes: ["current_channel"],
+          forms: ["select", "ask", "construct"],
+        },
+      },
+    }),
+    true,
+  );
+  assert.equal(
+    advertisesDkgSemanticQuery({
+      supported_extensions: ["buzz-dkg-memory-v2"],
+      dkg_memory: {
+        schema_versions: [2],
+        profiles: ["dkg-memory@1"],
+        query_operations: ["semantic_query"],
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    advertisesDkgMemory({
+      supported_extensions: ["buzz-dkg-memory-v1"],
+    }),
+    true,
+  );
+  assert.equal(advertisesDkgMemory({ supported_extensions: [] }), false);
+  assert.equal(advertisesDkgMemory({}), false);
 });

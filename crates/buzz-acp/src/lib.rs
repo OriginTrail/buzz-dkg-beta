@@ -120,6 +120,16 @@ struct DkgCapabilities {
     semantic_query: bool,
 }
 
+mod dkg_capability_contract {
+    pub const MEMORY_V1_EXTENSION: &str = "buzz-dkg-memory-v1";
+    pub const MEMORY_V2_EXTENSION: &str = "buzz-dkg-memory-v2";
+    pub const MEMORY_V2_SCHEMA_VERSION: u64 = 2;
+    pub const MEMORY_V2_PROFILE: &str = "dkg-memory@1";
+    pub const SEMANTIC_QUERY_OPERATION: &str = "semantic_query";
+    pub const SEMANTIC_QUERY_SCOPE: &str = "current_channel";
+    pub const SEMANTIC_QUERY_REQUIRED_FORMS: &[&str] = &["select", "ask"];
+}
+
 fn nip11_dkg_memory_schema(value: &serde_json::Value) -> Option<u8> {
     let extensions = value
         .get("supported_extensions")
@@ -128,26 +138,30 @@ fn nip11_dkg_memory_schema(value: &serde_json::Value) -> Option<u8> {
         .unwrap_or_default();
     let supports_v2 = extensions
         .iter()
-        .any(|extension| extension.as_str() == Some("buzz-dkg-memory-v2"));
+        .any(|extension| extension.as_str() == Some(dkg_capability_contract::MEMORY_V2_EXTENSION));
     let descriptor = value.get("dkg_memory");
     let descriptor_supports_v2 = descriptor
         .and_then(|item| item.get("schema_versions"))
         .and_then(serde_json::Value::as_array)
-        .is_some_and(|versions| versions.iter().any(|version| version.as_u64() == Some(2)))
+        .is_some_and(|versions| {
+            versions.iter().any(|version| {
+                version.as_u64() == Some(dkg_capability_contract::MEMORY_V2_SCHEMA_VERSION)
+            })
+        })
         && descriptor
             .and_then(|item| item.get("profiles"))
             .and_then(serde_json::Value::as_array)
             .is_some_and(|profiles| {
-                profiles
-                    .iter()
-                    .any(|profile| profile.as_str() == Some("dkg-memory@1"))
+                profiles.iter().any(|profile| {
+                    profile.as_str() == Some(dkg_capability_contract::MEMORY_V2_PROFILE)
+                })
             });
     if supports_v2 && descriptor_supports_v2 {
-        return Some(2);
+        return u8::try_from(dkg_capability_contract::MEMORY_V2_SCHEMA_VERSION).ok();
     }
     extensions
         .iter()
-        .any(|extension| extension.as_str() == Some("buzz-dkg-memory-v1"))
+        .any(|extension| extension.as_str() == Some(dkg_capability_contract::MEMORY_V1_EXTENSION))
         .then_some(1)
 }
 
@@ -160,9 +174,9 @@ fn nip11_dkg_semantic_query(value: &serde_json::Value) -> bool {
         .get("query_operations")
         .and_then(serde_json::Value::as_array)
         .is_some_and(|operations| {
-            operations
-                .iter()
-                .any(|operation| operation.as_str() == Some("semantic_query"))
+            operations.iter().any(|operation| {
+                operation.as_str() == Some(dkg_capability_contract::SEMANTIC_QUERY_OPERATION)
+            })
         });
     let semantic = match descriptor.get("semantic_query") {
         Some(semantic) => semantic,
@@ -174,13 +188,15 @@ fn nip11_dkg_semantic_query(value: &serde_json::Value) -> bool {
         .is_some_and(|scopes| {
             scopes
                 .iter()
-                .any(|scope| scope.as_str() == Some("current_channel"))
+                .any(|scope| scope.as_str() == Some(dkg_capability_contract::SEMANTIC_QUERY_SCOPE))
         });
     let forms = semantic.get("forms").and_then(serde_json::Value::as_array);
-    let has_form = |expected: &str| {
-        forms.is_some_and(|items| items.iter().any(|item| item.as_str() == Some(expected)))
-    };
-    operation && current_channel && has_form("select") && has_form("ask")
+    let has_required_forms = dkg_capability_contract::SEMANTIC_QUERY_REQUIRED_FORMS
+        .iter()
+        .all(|expected| {
+            forms.is_some_and(|items| items.iter().any(|item| item.as_str() == Some(*expected)))
+        });
+    operation && current_channel && has_required_forms
 }
 
 async fn relay_dkg_capabilities(relay_url: &str) -> DkgCapabilities {
@@ -3941,6 +3957,42 @@ mod agent_draft_prompt_tests {
 #[cfg(test)]
 mod dkg_memory_prompt_tests {
     use super::*;
+
+    #[test]
+    fn typed_capability_constants_match_the_shared_contract() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../shared/dkg-memory/capability-contract.json"
+        ))
+        .expect("shared capability contract must be valid JSON");
+        assert_eq!(
+            contract["memory"]["v1_extension"],
+            dkg_capability_contract::MEMORY_V1_EXTENSION
+        );
+        assert_eq!(
+            contract["memory"]["v2_extension"],
+            dkg_capability_contract::MEMORY_V2_EXTENSION
+        );
+        assert_eq!(
+            contract["memory"]["v2_schema_version"],
+            dkg_capability_contract::MEMORY_V2_SCHEMA_VERSION
+        );
+        assert_eq!(
+            contract["memory"]["v2_profile"],
+            dkg_capability_contract::MEMORY_V2_PROFILE
+        );
+        assert_eq!(
+            contract["semantic_query"]["operation"],
+            dkg_capability_contract::SEMANTIC_QUERY_OPERATION
+        );
+        assert_eq!(
+            contract["semantic_query"]["scope"],
+            dkg_capability_contract::SEMANTIC_QUERY_SCOPE
+        );
+        assert_eq!(
+            contract["semantic_query"]["required_forms"],
+            serde_json::json!(dkg_capability_contract::SEMANTIC_QUERY_REQUIRED_FORMS)
+        );
+    }
 
     #[test]
     fn capability_detection_is_exact_and_fail_closed() {

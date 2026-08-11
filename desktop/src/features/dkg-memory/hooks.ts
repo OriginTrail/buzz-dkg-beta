@@ -1,9 +1,45 @@
 import { useQuery } from "@tanstack/react-query";
+import { getRelayHttpUrl } from "@/shared/api/tauri";
 import {
   deriveContextGraphId,
   fetchChannelMemory,
   fetchContributorTrail,
 } from "./api";
+import { fetchDkgMemoryCapabilities } from "./capabilities";
+
+const CAPABILITY_RETRY_DELAYS_MS = [250, 1_000, 5_000] as const;
+
+function useRelayHttpUrl({ enabled }: { enabled: boolean }) {
+  return useQuery({
+    queryKey: ["dkg-memory", "relay-http"],
+    queryFn: getRelayHttpUrl,
+    enabled,
+    select: (relay) => relay.replace(/\/+$/, ""),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+}
+
+async function fetchRelayCapabilities(relay: string | null) {
+  if (!relay) throw new Error("Relay URL is unavailable.");
+  return fetchDkgMemoryCapabilities(relay);
+}
+
+export function useDkgMemoryCapabilities({ enabled }: { enabled: boolean }) {
+  const relayQuery = useRelayHttpUrl({ enabled });
+  const relay = relayQuery.data ?? null;
+
+  return useQuery({
+    queryKey: ["dkg-memory", "capabilities", relay],
+    queryFn: () => fetchRelayCapabilities(relay),
+    enabled: Boolean(enabled && relay),
+    retry: CAPABILITY_RETRY_DELAYS_MS.length,
+    retryDelay: (attempt) =>
+      CAPABILITY_RETRY_DELAYS_MS[
+        Math.min(attempt, CAPABILITY_RETRY_DELAYS_MS.length - 1)
+      ],
+    staleTime: 5 * 60 * 1_000,
+  });
+}
 
 export function useChannelContextGraph(channelId: string | null) {
   return useQuery({

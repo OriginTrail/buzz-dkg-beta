@@ -9,7 +9,6 @@ import {
 } from "@/features/messages/lib/messageRowEquality";
 import type { TimelineMessage } from "@/features/messages/types";
 import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
-import { MessageMemoryStatus } from "@/features/dkg-memory/ui/MessageMemoryStatus";
 import { HuddleAttachment } from "@/features/huddle/components/HuddleAttachment";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
@@ -60,6 +59,7 @@ export type ThreadDepthGuideAction = {
 
 export const MessageRow = React.memo(
   function MessageRow({
+    bodyAdornment,
     channelId = null,
     collapseDepthGuideActions,
     connectDescendants = false,
@@ -98,6 +98,7 @@ export const MessageRow = React.memo(
     showDepthGuides = true,
     videoReviewContext,
   }: {
+    bodyAdornment?: React.ReactNode;
     channelId?: string | null;
     collapseDepthGuideActions?: ReadonlyArray<ThreadDepthGuideAction>;
     connectDescendants?: boolean;
@@ -592,14 +593,7 @@ export const MessageRow = React.memo(
     const messageBodyNode = (
       <>
         {renderBody()}
-        {channelId && message.isAgent && message.signerPubkey ? (
-          <MessageMemoryStatus
-            agentName={message.author}
-            agentPubkey={message.signerPubkey}
-            channelId={channelId}
-            messageId={message.id}
-          />
-        ) : null}
+        {bodyAdornment}
         {continuationMetadataNode}
         <MessageReactions
           messageId={message.id}
@@ -892,6 +886,7 @@ export const MessageRow = React.memo(
     prev.isFollowingThread === next.isFollowingThread &&
     prev.isUnread === next.isUnread &&
     prev.layoutVariant === next.layoutVariant &&
+    prev.bodyAdornment === next.bodyAdornment &&
     prev.onCollapseDepthGuide === next.onCollapseDepthGuide &&
     prev.onCollapseDepthGuideHoverChange ===
       next.onCollapseDepthGuideHoverChange &&

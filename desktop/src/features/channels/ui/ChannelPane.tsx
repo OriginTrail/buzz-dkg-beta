@@ -22,13 +22,13 @@ import {
   getDmHuddleMemberPubkeys,
   hasOtherDmParticipant,
 } from "@/features/channels/lib/dmHuddleMembers";
-import { buildVideoReviewContextsByMessageId } from "@/features/messages/lib/videoReviewContext";
 import { useComposerHeightPadding } from "@/features/messages/ui/useComposerHeightPadding";
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
 import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
 import { ChannelManagementAuxiliaryPanel } from "@/features/channels/ui/ChannelManagementAuxiliaryPanel";
 import { DkgMemoryDock } from "@/features/dkg-memory/ui/DkgMemoryDock";
+import { useDkgMemoryMessageAdornments } from "@/features/dkg-memory/ui/messageAdornments";
 import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
 import { ThreadViewModeToggle } from "@/features/channels/ui/ThreadViewModeToggle";
 import { FocusThreadDrawer } from "@/features/channels/ui/FocusThreadDrawer";
@@ -57,6 +57,7 @@ import type { ChannelPaneProps } from "@/features/channels/ui/ChannelPane.types"
 import * as agentSessionSelection from "@/features/channels/ui/agentSessionSelection";
 import { usePrepareDmSendChannel } from "@/features/channels/ui/usePrepareDmSendChannel";
 import { useChannelPaneMessages } from "@/features/channels/ui/useChannelPaneMessages";
+import { useThreadVideoReviewContexts } from "@/features/channels/ui/useThreadVideoReviewContexts";
 import { Button } from "@/shared/ui/button";
 import { useRenderScopedReactionHydration } from "@/features/messages/lib/useRenderScopedReactionHydration";
 import type { TimelineMessage } from "@/features/messages/types";
@@ -456,46 +457,28 @@ export const ChannelPane = React.memo(function ChannelPane({
     profiles,
     threadSummaries,
   });
+  const messageBodyAdornments = useDkgMemoryMessageAdornments(
+    activeChannelId,
+    messages,
+    threadHeadMessage,
+    threadAllMessages,
+  );
   useRenderScopedReactionHydration({
     activeChannel,
     mainTimelineEntries,
     threadHeadMessage,
     threadMessages,
   });
-  const activeVideoReviewCommentSender = activeChannel?.archivedAt
-    ? undefined
-    : onSendVideoReviewComment;
-  const threadVideoReviewContextsByMessageId = React.useMemo(() => {
-    const messagesById = new Map(
-      messages.map((message) => [message.id, message]),
-    );
-    if (threadHeadMessage) {
-      messagesById.set(threadHeadMessage.id, threadHeadMessage);
-    }
-    for (const message of threadAllMessages) {
-      messagesById.set(message.id, message);
-    }
-
-    return buildVideoReviewContextsByMessageId({
-      channelId: activeChannel?.id ?? null,
-      channelName: activeChannel?.name,
-      channelType: activeChannel?.channelType ?? null,
-      isSendingVideoReviewComment: isSending,
-      messages: [...messagesById.values()],
-      onSendVideoReviewComment: activeVideoReviewCommentSender,
-      onToggleReaction,
-      profiles,
-    });
-  }, [
+  const threadVideoReviewContextsByMessageId = useThreadVideoReviewContexts({
     activeChannel,
-    activeVideoReviewCommentSender,
     isSending,
     messages,
+    onSendVideoReviewComment,
     onToggleReaction,
     profiles,
     threadAllMessages,
     threadHeadMessage,
-  ]);
+  });
 
   const isOverlay = useIsThreadPanelOverlay();
   const useSplitAuxiliaryPane = !isSinglePanelView && !isOverlay;
@@ -672,6 +655,7 @@ export const ChannelPane = React.memo(function ChannelPane({
             mainEntries={mainTimelineEntries}
             threadSummaries={threadSummaries}
             messages={visibleMessages}
+            messageBodyAdornments={messageBodyAdornments}
             firstUnreadMessageId={firstUnreadMessageId}
             unreadCount={unreadCount}
             onDelete={onDelete}
@@ -885,6 +869,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                 scrollTargetHighlights={!layoutScrollTargetId}
                 scrollTargetId={layoutScrollTargetId ?? threadScrollTargetId}
                 threadHead={threadHeadMessage}
+                messageBodyAdornments={messageBodyAdornments}
                 videoReviewContextsByMessageId={
                   threadVideoReviewContextsByMessageId
                 }
