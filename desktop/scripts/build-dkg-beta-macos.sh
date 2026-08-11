@@ -78,7 +78,19 @@ UPDATER_ARCHIVE=$(find "$BUNDLE_ROOT/macos" -name '*.app.tar.gz' -type f | head 
 if [[ -n "$UPDATER_ARCHIVE" ]]; then
   UPDATER_SIG="${UPDATER_ARCHIVE}.sig"
   if [[ ! -f "$UPDATER_SIG" ]]; then
-    echo "Updater archive was produced without a signature: $UPDATER_ARCHIVE" >&2
+    if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" && -z "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]]; then
+      echo "Updater archive was produced without a signature and no updater signing key is configured: $UPDATER_ARCHIVE" >&2
+      exit 1
+    fi
+
+    # --no-sign keeps the beta app free of Apple publisher signing, but it also
+    # suppresses Tauri updater signing. Sign only the updater archive here so
+    # installed beta builds can still verify updates cryptographically.
+    echo "==> Signing updater archive"
+    ./node_modules/.bin/tauri signer sign "$UPDATER_ARCHIVE"
+  fi
+  if [[ ! -f "$UPDATER_SIG" ]]; then
+    echo "Updater signature was not produced: $UPDATER_SIG" >&2
     exit 1
   fi
   RENAMED_ARCHIVE="$BUNDLE_ROOT/macos/Buzz-DKG-Beta_${VERSION}_${ARCH}.app.tar.gz"
