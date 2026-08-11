@@ -10,6 +10,7 @@ import {
 import type { TimelineMessage } from "@/features/messages/types";
 import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
 import { MessageMemoryStatus } from "@/features/dkg-memory/ui/MessageMemoryStatus";
+import type { AgentMessageMemoryStatus } from "@/features/dkg-memory/messageStatusMap";
 import { HuddleAttachment } from "@/features/huddle/components/HuddleAttachment";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
@@ -79,6 +80,7 @@ export const MessageRow = React.memo(
     isUnread,
     layoutVariant = "default",
     message,
+    memoryStatus,
     onCollapseDepthGuide,
     onCollapseDepthGuideHoverChange,
     onCollapseDescendants,
@@ -117,6 +119,7 @@ export const MessageRow = React.memo(
     isUnread?: boolean;
     layoutVariant?: "default" | "thread-reply";
     message: TimelineMessage;
+    memoryStatus?: AgentMessageMemoryStatus | null;
     onCollapseDepthGuide?: (message: TimelineMessage) => void;
     onCollapseDepthGuideHoverChange?: (
       message: TimelineMessage,
@@ -592,12 +595,13 @@ export const MessageRow = React.memo(
     const messageBodyNode = (
       <>
         {renderBody()}
-        {channelId && message.isAgent && message.signerPubkey ? (
+        {channelId && memoryStatus ? (
           <MessageMemoryStatus
-            agentName={message.author}
-            agentPubkey={message.signerPubkey}
+            agentName={memoryStatus.agentName}
+            agentPubkey={memoryStatus.agentPubkey}
             channelId={channelId}
             messageId={message.id}
+            status={memoryStatus.status}
           />
         ) : null}
         {continuationMetadataNode}
@@ -892,6 +896,9 @@ export const MessageRow = React.memo(
     prev.isFollowingThread === next.isFollowingThread &&
     prev.isUnread === next.isUnread &&
     prev.layoutVariant === next.layoutVariant &&
+    prev.memoryStatus?.agentName === next.memoryStatus?.agentName &&
+    prev.memoryStatus?.agentPubkey === next.memoryStatus?.agentPubkey &&
+    prev.memoryStatus?.status === next.memoryStatus?.status &&
     prev.onCollapseDepthGuide === next.onCollapseDepthGuide &&
     prev.onCollapseDepthGuideHoverChange ===
       next.onCollapseDepthGuideHoverChange &&
