@@ -1,0 +1,35 @@
+name: Promote Buzz DKG Beta desktop update
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Beta semver without the leading v
+        required: true
+        type: string
+
+concurrency:
+  group: buzz-dkg-beta-promotion
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    name: Promote signed updater manifest
+    if: github.repository == 'OriginTrail/buzz-dkg-beta' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Promote immutable beta release
+        run: scripts/promote-dkg-beta-desktop-release.sh "$VERSION"
