@@ -138,6 +138,58 @@ function ProviderBadge() {
   );
 }
 
+function LayerCountsLegend({
+  counts,
+}: {
+  counts: Readonly<Record<keyof typeof LAYER_META, number>>;
+}) {
+  return (
+    <div className="ml-2 flex items-center gap-2">
+      {(["WM", "SWM", "VM"] as const).map((tag) => (
+        <span
+          key={tag}
+          className="flex items-center gap-1 rounded-md border border-border bg-muted/30 px-1.5 py-0.5 text-2xs"
+          title={LAYER_META[tag].label}
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${LAYER_META[tag].dot}`} />
+          {tag}
+          <span className="tabular-nums text-muted-foreground">
+            {counts[tag]}
+          </span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function GraphModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: "spine" | "topology";
+  onChange: (mode: "spine" | "topology") => void;
+}) {
+  return (
+    <div className="ml-auto flex rounded-md border border-border text-xs">
+      <button
+        type="button"
+        onClick={() => onChange("spine")}
+        className={`rounded-l-md px-2 py-1 ${mode === "spine" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
+      >
+        Traces
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("topology")}
+        data-testid="dkg-topology-toggle"
+        className={`rounded-r-md px-2 py-1 ${mode === "topology" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
+      >
+        ⬡ Graph
+      </button>
+    </div>
+  );
+}
+
 function ChannelGraphOverlay({
   channelId,
   cg,
@@ -201,23 +253,7 @@ function DecisionsGraphOverlay({
           </span>
         </>
       }
-      headerControls={
-        <div className="ml-2 flex items-center gap-2">
-          {(["WM", "SWM", "VM"] as const).map((tag) => (
-            <span
-              key={tag}
-              className="flex items-center gap-1 rounded-md border border-border bg-muted/30 px-1.5 py-0.5 text-2xs"
-              title={LAYER_META[tag].label}
-            >
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${LAYER_META[tag].dot}`}
-              />
-              {tag}
-              <span className="tabular-nums text-muted-foreground">0</span>
-            </span>
-          ))}
-        </div>
-      }
+      headerControls={<LayerCountsLegend counts={{ WM: 0, SWM: 0, VM: 0 }} />}
       aside={
         selection ? (
           <EvidenceRail selection={selection} cg={cg} />
@@ -288,40 +324,8 @@ function SubgraphGraphOverlay({
 
   const controls = (
     <>
-      <div className="ml-2 flex items-center gap-2">
-        {(["WM", "SWM", "VM"] as const).map((tag) => (
-          <span
-            key={tag}
-            className="flex items-center gap-1 rounded-md border border-border bg-muted/30 px-1.5 py-0.5 text-2xs"
-            title={LAYER_META[tag].label}
-          >
-            <span
-              className={`h-1.5 w-1.5 rounded-full ${LAYER_META[tag].dot}`}
-            />
-            {tag}
-            <span className="tabular-nums text-muted-foreground">
-              {layerCounts[tag]}
-            </span>
-          </span>
-        ))}
-      </div>
-      <div className="ml-auto flex rounded-md border border-border text-xs">
-        <button
-          type="button"
-          onClick={() => setMode("spine")}
-          className={`rounded-l-md px-2 py-1 ${mode === "spine" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
-        >
-          Traces
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode("topology")}
-          data-testid="dkg-topology-toggle"
-          className={`rounded-r-md px-2 py-1 ${mode === "topology" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
-        >
-          ⬡ Graph
-        </button>
-      </div>
+      <LayerCountsLegend counts={layerCounts} />
+      <GraphModeToggle mode={mode} onChange={setMode} />
     </>
   );
 
