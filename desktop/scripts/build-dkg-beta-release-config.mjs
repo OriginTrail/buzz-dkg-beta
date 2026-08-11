@@ -1,5 +1,9 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import {
+  buildUpdaterReleaseConfig,
+  readUpdaterReleaseEnvironment,
+} from "./updater-release-config.mjs";
 
 // Build the release-only Tauri delta from the checked-in DKG beta config.
 // Local beta builds intentionally keep updater artifacts disabled; GitHub
@@ -15,34 +19,10 @@ const outputConfigPath = resolve(
   "src-tauri/tauri.dkg-beta.release.conf.json",
 );
 
-const updaterPubkey = process.env.BUZZ_UPDATER_PUBLIC_KEY?.trim();
-const updaterEndpoint = process.env.BUZZ_UPDATER_ENDPOINT?.trim();
-const missing = [];
-if (!updaterPubkey) missing.push("BUZZ_UPDATER_PUBLIC_KEY");
-if (!updaterEndpoint) missing.push("BUZZ_UPDATER_ENDPOINT");
-if (missing.length > 0) {
-  console.error(
-    `Error: required environment variable(s) missing: ${missing.join(", ")}`,
-  );
-  process.exit(1);
-}
-
 const config = JSON.parse(readFileSync(betaConfigPath, "utf8"));
-const releaseConfig = {
-  ...config,
-  plugins: {
-    ...config.plugins,
-    updater: {
-      pubkey: updaterPubkey,
-      endpoints: [updaterEndpoint],
-    },
-  },
-  bundle: {
-    ...config.bundle,
-    createUpdaterArtifacts: true,
-  },
-};
+const { pubkey, endpoint } = readUpdaterReleaseEnvironment();
+const releaseConfig = buildUpdaterReleaseConfig(config, { pubkey, endpoint });
 
 writeFileSync(outputConfigPath, `${JSON.stringify(releaseConfig, null, 2)}\n`);
-console.log(`DKG beta updater enabled -> ${updaterEndpoint}`);
+console.log(`DKG beta updater enabled -> ${endpoint}`);
 console.log(`Wrote ${outputConfigPath}`);

@@ -1,5 +1,9 @@
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import {
+  buildUpdaterReleaseConfig,
+  readUpdaterReleaseEnvironment,
+} from "./updater-release-config.mjs";
 
 // Write a tauri.release.conf.json with release-only overrides.
 //
@@ -24,44 +28,13 @@ const outputConfigPath = resolve(
   "src-tauri/tauri.release.conf.json",
 );
 
-const updaterPubkey = process.env.BUZZ_UPDATER_PUBLIC_KEY;
-const updaterEndpoint = process.env.BUZZ_UPDATER_ENDPOINT;
+const { pubkey, endpoint } = readUpdaterReleaseEnvironment();
+const releaseConfig = buildUpdaterReleaseConfig(
+  {},
+  { pubkey, endpoint, minimumMacOSVersion: "10.15" },
+);
 
-const missing = [];
-if (!updaterPubkey) missing.push("BUZZ_UPDATER_PUBLIC_KEY");
-if (!updaterEndpoint) missing.push("BUZZ_UPDATER_ENDPOINT");
-if (missing.length > 0) {
-  console.error(
-    `Error: required environment variable(s) missing: ${missing.join(", ")}`,
-  );
-  process.exit(1);
-}
-
-const releaseConfig = {
-  bundle: {
-    macOS: {
-      minimumSystemVersion: "10.15",
-    },
-    createUpdaterArtifacts: true,
-  },
-  plugins: {
-    updater: {
-      pubkey: updaterPubkey,
-      endpoints: [updaterEndpoint],
-    },
-  },
-};
-
-// Tauri applies --config after platform-specific config using RFC 7396.
-// Any externalBin value here would therefore replace the platform sidecar list,
-// while null would silently delete it. This delta must never own that key.
-if (Object.hasOwn(releaseConfig.bundle, "externalBin")) {
-  throw new Error(
-    "Release config must not define bundle.externalBin; sidecars are platform-specific",
-  );
-}
-
-console.log(`Updater enabled -> ${updaterEndpoint}`);
+console.log(`Updater enabled -> ${endpoint}`);
 
 writeFileSync(outputConfigPath, `${JSON.stringify(releaseConfig, null, 2)}\n`);
 console.log(`Wrote ${outputConfigPath}`);

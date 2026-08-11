@@ -16,6 +16,9 @@ const frontendBuildScript = read("desktop/scripts/build-dkg-beta-frontend.sh");
 const releaseConfigScript = read(
   "desktop/scripts/build-dkg-beta-release-config.mjs",
 );
+const sharedReleaseConfigScript = read(
+  "desktop/scripts/updater-release-config.mjs",
+);
 const versionScript = read("desktop/scripts/set-dkg-beta-version.mjs");
 const workflow = read(".github/workflows/dkg-beta-desktop.yml");
 const promotionWorkflow = read(
@@ -155,9 +158,10 @@ for (const required of [
   check(workflow.includes(required), `desktop workflow is missing ${required}`);
 }
 check(
-  releaseConfigScript.includes("createUpdaterArtifacts: true") &&
-    releaseConfigScript.includes("BUZZ_UPDATER_PUBLIC_KEY") &&
-    releaseConfigScript.includes("BUZZ_UPDATER_ENDPOINT"),
+  releaseConfigScript.includes("buildUpdaterReleaseConfig") &&
+    sharedReleaseConfigScript.includes("createUpdaterArtifacts: true") &&
+    sharedReleaseConfigScript.includes("BUZZ_UPDATER_PUBLIC_KEY") &&
+    sharedReleaseConfigScript.includes("BUZZ_UPDATER_ENDPOINT"),
   "release config must enable signed updater artifacts and the rolling endpoint",
 );
 check(
