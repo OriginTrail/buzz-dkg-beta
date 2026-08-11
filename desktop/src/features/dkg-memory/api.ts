@@ -5,7 +5,12 @@
 // and display fallback; their Context Graph id is never sent as remote
 // authorization input.
 import { relayClient } from "@/shared/api/relayClient";
-import { queryDkgProvider } from "./provider";
+import { getRelayHttpUrl, signRelayEvent } from "@/shared/api/tauri";
+import { postAuthenticatedDkgJson, queryDkgProvider } from "./provider";
+import {
+  memoryProposalProgress,
+  normalizedMemoryProposalState,
+} from "./proposalState";
 
 export {
   explorerSource,
@@ -95,6 +100,262 @@ export interface DecisionTrace {
   commitSha: string;
   componentName: string;
   decisions: DecisionTraceEntry[];
+}
+
+export interface SemanticQueryLayer {
+  layer: "SWM" | "VM";
+  bindings: Record<string, unknown>[];
+  quads?: unknown[];
+}
+
+export interface SemanticQueryResult {
+  gate: MemoryGate;
+  cg?: string;
+  queryType: "select" | "ask" | "construct";
+  scope: { type: "current_channel" };
+  cost?: {
+    score: number;
+    budget: number;
+    metrics?: Record<string, number>;
+  };
+  layers: SemanticQueryLayer[];
+}
+
+export type DkgDiagnosticStatus = "pass" | "fail" | "skipped";
+
+export interface DkgDiagnosticCheck {
+  id: "relay" | "identity" | "graph" | "query";
+  label: string;
+  status: DkgDiagnosticStatus;
+  detail: string;
+  durationMs?: number;
+}
+
+export interface DkgDiagnosticReport {
+  checkedAt: string;
+  relay: string;
+  channelId: string;
+  checks: DkgDiagnosticCheck[];
+}
+
+export async function fetchSemanticQuery(
+  channelId: string,
+  sparql: string,
+  view: "both" | "shared" | "verified" = "both",
+): Promise<SemanticQueryResult> {
+  return queryDkgProvider<SemanticQueryResult, "semantic_query">({
+    channelId,
+    operation: "semantic_query",
+    arguments: { sparql, view },
+    localPath: null,
+  });
+}
+
+function diagnosticError(cause: unknown): string {
+  if (cause instanceof Error && cause.message.trim()) return cause.message;
+  return "The check did not return a usable response.";
+}
+
+async function timedDiagnostic<T>(
+  run: () => Promise<T>,
+): Promise<{ value?: T; error?: string; durationMs: number }> {
+  const started = performance.now();
+  try {
+    return { value: await run(), durationMs: performance.now() - started };
+  } catch (cause) {
+    return {
+      error: diagnosticError(cause),
+      durationMs: performance.now() - started,
+    };
+  }
+}
+
+/**
+ * Exercise the same public, authenticated path the desktop and agents use.
+ * The report contains no credentials, graph IDs, or Nostr private material and
+ * is safe for a community member to copy into a support message.
+ */
+export async function runDkgDiagnostics(
+  channelId: string,
+): Promise<DkgDiagnosticReport> {
+  const relay = (await getRelayHttpUrl()).replace(/\/+$/, "");
+  const checks: DkgDiagnosticCheck[] = [];
+  const capability = await timedDiagnostic(async () => {
+    const response = await fetch(`${relay}/`, {
+      headers: { Accept: "application/nostr+json" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok)
+      throw new Error(`Relay discovery returned ${response.status}.`);
+    const document = (await response.json()) as {
+      supported_extensions?: unknown;
+      dkg_memory?: { query_operations?: unknown };
+    };
+    const extensions = Array.isArray(document.supported_extensions)
+      ? document.supported_extensions
+      : [];
+    const operations = Array.isArray(document.dkg_memory?.query_operations)
+      ? document.dkg_memory.query_operations
+      : [];
+    if (
+      !extensions.some((entry) =>
+        ["buzz-dkg-memory-v1", "buzz-dkg-memory-v2"].includes(String(entry)),
+      ) ||
+      !operations.includes("semantic_query")
+    ) {
+      throw new Error(
+        "Relay does not advertise the required DKG memory capabilities.",
+      );
+    }
+  });
+  checks.push({
+    id: "relay",
+    label: "Relay capability",
+    status: capability.error ? "fail" : "pass",
+    detail:
+      capability.error ?? "DKG memory and semantic queries are advertised.",
+    durationMs: Math.round(capability.durationMs),
+  });
+
+  const channel = await timedDiagnostic(() =>
+    fetchChannelMemory(channelId, null),
+  );
+  const channelReady = channel.value?.gate === "ok";
+  checks.push({
+    id: "identity",
+    label: "Buzz identity",
+    status: channel.error ? "fail" : "pass",
+    detail:
+      channel.error ??
+      "The relay accepted this app identity for an authenticated DKG request.",
+    durationMs: Math.round(channel.durationMs),
+  });
+  checks.push({
+    id: "graph",
+    label: "Channel Context Graph",
+    status: channelReady ? "pass" : "fail",
+    detail: channelReady
+      ? "The relay resolved this channel to an accessible Context Graph."
+      : channel.error
+        ? "The authenticated channel check could not complete."
+        : `The memory provider returned gate: ${channel.value?.gate ?? "unknown"}.`,
+    durationMs: Math.round(channel.durationMs),
+  });
+
+  if (channelReady) {
+    const query = await timedDiagnostic(() =>
+      fetchSemanticQuery(
+        channelId,
+        `PREFIX schema: <http://schema.org/>\nASK WHERE { GRAPH ?g { ?entity schema:name ?name . } }`,
+      ),
+    );
+    checks.push({
+      id: "query",
+      label: "Semantic query",
+      status: query.error ? "fail" : "pass",
+      detail:
+        query.error ??
+        `A bounded SPARQL health query completed${query.value?.cost ? ` (weight ${query.value.cost.score}/${query.value.cost.budget})` : ""}.`,
+      durationMs: Math.round(query.durationMs),
+    });
+  } else {
+    checks.push({
+      id: "query",
+      label: "Semantic query",
+      status: "skipped",
+      detail: "Skipped until channel access and graph resolution succeed.",
+    });
+  }
+
+  return {
+    checkedAt: new Date().toISOString(),
+    relay,
+    channelId,
+    checks,
+  };
+}
+
+/**
+ * Deliberately start channel memory from a user action. The visible channel
+ * message is the proposal's provenance, while the existing integration lazily
+ * provisions the deterministic channel Context Graph when it accepts it.
+ */
+export async function enableChannelMemory(channelId: string): Promise<{
+  cg?: string;
+  operationId?: string | number;
+  state?: string;
+}> {
+  const source = await relayClient.sendMessage(
+    channelId,
+    "🧠 DKG memory setup requested for this channel.",
+  );
+  const proposal = await signRelayEvent({
+    kind: 40009,
+    content: JSON.stringify({
+      schemaVersion: 2,
+      profiles: ["dkg-memory@1"],
+      summary: "Request DKG memory setup for this Buzz channel.",
+      entities: [
+        {
+          id: "channel-memory",
+          type: "memory:Entity",
+          name: "Channel DKG memory",
+          description: "DKG-backed semantic memory requested for this channel.",
+        },
+      ],
+      relations: [],
+      model: "buzz-dkg-beta-ui",
+      promptVersion: "channel-memory-enable-v1",
+    }),
+    tags: [
+      ["h", channelId],
+      ["t", "dkg-memory-proposal"],
+      ["e", source.id, "", "source"],
+    ],
+  });
+  const body = JSON.stringify(proposal);
+  const deadline = Date.now() + 120_000;
+  let result: MemoryProvisioningResponse | null = null;
+  do {
+    result = await postMemoryProposal(body);
+    const progress = memoryProposalProgress(result.state);
+    if (progress !== "processing") {
+      return {
+        ...result,
+        cg: result.cg ?? result.contextGraphId,
+      };
+    }
+    if (Date.now() >= deadline) break;
+    await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+  } while (Date.now() < deadline);
+
+  throw new Error(
+    "DKG memory was accepted and is still provisioning. Keep this panel open and refresh shortly.",
+  );
+}
+
+interface MemoryProvisioningResponse {
+  cg?: string;
+  contextGraphId?: string;
+  operationId?: string | number;
+  state?: string;
+  error?: unknown;
+}
+
+async function postMemoryProposal(
+  body: string,
+): Promise<MemoryProvisioningResponse> {
+  const { result, status } =
+    await postAuthenticatedDkgJson<MemoryProvisioningResponse>({
+      path: "/api/dkg/memory",
+      body,
+    });
+  return {
+    ...result,
+    state:
+      normalizedMemoryProposalState(result.state) ??
+      (status === 202 ? "processing" : status === 200 ? "stored" : undefined),
+  };
 }
 
 /**

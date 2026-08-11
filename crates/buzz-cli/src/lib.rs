@@ -1794,6 +1794,13 @@ pub enum MemoryCmd {
         /// JSON proposal file, or '-' to read JSON from stdin
         #[arg(long, default_value = "-")]
         input: String,
+        /// Wait for the accepted proposal to become queryable (0 returns immediately)
+        #[arg(
+            long,
+            default_value_t = 120,
+            value_parser = clap::value_parser!(u64).range(0..=600)
+        )]
+        wait_seconds: u64,
     },
     /// Run a safe, read-only SPARQL query against the current channel's DKG memory
     Query {
@@ -2326,7 +2333,7 @@ mod tests {
             vec!["create", "get", "list", "status"]
         );
         assert_eq!(names(&cmd, "media"), vec!["get"]);
-        assert_eq!(names(&cmd, "memory"), vec!["propose"]);
+        assert_eq!(names(&cmd, "memory"), vec!["propose", "query"]);
         assert_eq!(names(&cmd, "upload"), vec!["file"]);
         assert_eq!(names(&cmd, "pack"), vec!["inspect", "validate"]);
         assert_eq!(
@@ -2356,7 +2363,7 @@ mod tests {
             ("issues", 4),
             ("media", 1),
             ("messages", 8),
-            ("memory", 1),
+            ("memory", 2),
             ("pack", 2),
             ("patches", 4),
             ("pr", 5),
