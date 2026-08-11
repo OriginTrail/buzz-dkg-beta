@@ -80,6 +80,8 @@ type MessageTimelineProps = {
   pinnedIntro?: React.ReactNode;
   isFetchingOlder?: boolean;
   messageFooters?: Record<string, React.ReactNode>;
+  /** Feature-owned content rendered between a message body and its reactions. */
+  messageBodyAdornments?: ReadonlyMap<string, React.ReactNode>;
   /** Map from lowercase pubkey → persona display name for bot members. */
   personaLookup?: Map<string, string>;
   profiles?: UserProfileLookup;
@@ -182,6 +184,7 @@ const MessageTimelineBase = React.forwardRef<
     huddleMemberPubkeysPending = false,
     isFollowingThreadById,
     isMessageUnreadById,
+    messageBodyAdornments,
     messageFooters,
     personaLookup,
     profiles,
@@ -648,6 +651,7 @@ const MessageTimelineBase = React.forwardRef<
       isMessageUnreadById={isMessageUnreadById}
       entranceMessageId={entranceMessageId}
       onEntranceMessageComplete={onEntranceMessageComplete}
+      messageBodyAdornments={messageBodyAdornments}
       messageFooters={messageFooters}
       mainEntries={renderedMessages === messages ? mainEntries : undefined}
       leadingContent={virtualizedLeadingContent}

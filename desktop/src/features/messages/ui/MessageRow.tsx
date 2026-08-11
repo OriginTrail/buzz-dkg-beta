@@ -9,8 +9,6 @@ import {
 } from "@/features/messages/lib/messageRowEquality";
 import type { TimelineMessage } from "@/features/messages/types";
 import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
-import { MessageMemoryStatus } from "@/features/dkg-memory/ui/MessageMemoryStatus";
-import type { AgentMessageMemoryStatus } from "@/features/dkg-memory/messageStatusMap";
 import { HuddleAttachment } from "@/features/huddle/components/HuddleAttachment";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
@@ -61,6 +59,7 @@ export type ThreadDepthGuideAction = {
 
 export const MessageRow = React.memo(
   function MessageRow({
+    bodyAdornment,
     channelId = null,
     collapseDepthGuideActions,
     connectDescendants = false,
@@ -80,7 +79,6 @@ export const MessageRow = React.memo(
     isUnread,
     layoutVariant = "default",
     message,
-    memoryStatus,
     onCollapseDepthGuide,
     onCollapseDepthGuideHoverChange,
     onCollapseDescendants,
@@ -100,6 +98,7 @@ export const MessageRow = React.memo(
     showDepthGuides = true,
     videoReviewContext,
   }: {
+    bodyAdornment?: React.ReactNode;
     channelId?: string | null;
     collapseDepthGuideActions?: ReadonlyArray<ThreadDepthGuideAction>;
     connectDescendants?: boolean;
@@ -119,7 +118,6 @@ export const MessageRow = React.memo(
     isUnread?: boolean;
     layoutVariant?: "default" | "thread-reply";
     message: TimelineMessage;
-    memoryStatus?: AgentMessageMemoryStatus | null;
     onCollapseDepthGuide?: (message: TimelineMessage) => void;
     onCollapseDepthGuideHoverChange?: (
       message: TimelineMessage,
@@ -595,15 +593,7 @@ export const MessageRow = React.memo(
     const messageBodyNode = (
       <>
         {renderBody()}
-        {channelId && memoryStatus ? (
-          <MessageMemoryStatus
-            agentName={memoryStatus.agentName}
-            agentPubkey={memoryStatus.agentPubkey}
-            channelId={channelId}
-            messageId={message.id}
-            status={memoryStatus.status}
-          />
-        ) : null}
+        {bodyAdornment}
         {continuationMetadataNode}
         <MessageReactions
           messageId={message.id}
@@ -896,9 +886,7 @@ export const MessageRow = React.memo(
     prev.isFollowingThread === next.isFollowingThread &&
     prev.isUnread === next.isUnread &&
     prev.layoutVariant === next.layoutVariant &&
-    prev.memoryStatus?.agentName === next.memoryStatus?.agentName &&
-    prev.memoryStatus?.agentPubkey === next.memoryStatus?.agentPubkey &&
-    prev.memoryStatus?.status === next.memoryStatus?.status &&
+    prev.bodyAdornment === next.bodyAdornment &&
     prev.onCollapseDepthGuide === next.onCollapseDepthGuide &&
     prev.onCollapseDepthGuideHoverChange ===
       next.onCollapseDepthGuideHoverChange &&

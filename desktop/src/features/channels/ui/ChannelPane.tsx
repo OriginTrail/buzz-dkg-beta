@@ -29,6 +29,7 @@ import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
 import { ChannelManagementAuxiliaryPanel } from "@/features/channels/ui/ChannelManagementAuxiliaryPanel";
 import { DkgMemoryDock } from "@/features/dkg-memory/ui/DkgMemoryDock";
+import { useDkgMemoryMessageAdornments } from "@/features/dkg-memory/ui/messageAdornments";
 import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
 import { ThreadViewModeToggle } from "@/features/channels/ui/ThreadViewModeToggle";
 import { FocusThreadDrawer } from "@/features/channels/ui/FocusThreadDrawer";
@@ -456,6 +457,17 @@ export const ChannelPane = React.memo(function ChannelPane({
     profiles,
     threadSummaries,
   });
+  const memoryMessages = React.useMemo(() => {
+    const byId = new Map<string, TimelineMessage>();
+    for (const message of messages) byId.set(message.id, message);
+    if (threadHeadMessage) byId.set(threadHeadMessage.id, threadHeadMessage);
+    for (const message of threadAllMessages) byId.set(message.id, message);
+    return [...byId.values()];
+  }, [messages, threadAllMessages, threadHeadMessage]);
+  const messageBodyAdornments = useDkgMemoryMessageAdornments(
+    activeChannelId,
+    memoryMessages,
+  );
   useRenderScopedReactionHydration({
     activeChannel,
     mainTimelineEntries,
@@ -672,6 +684,7 @@ export const ChannelPane = React.memo(function ChannelPane({
             mainEntries={mainTimelineEntries}
             threadSummaries={threadSummaries}
             messages={visibleMessages}
+            messageBodyAdornments={messageBodyAdornments}
             firstUnreadMessageId={firstUnreadMessageId}
             unreadCount={unreadCount}
             onDelete={onDelete}
@@ -885,6 +898,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                 scrollTargetHighlights={!layoutScrollTargetId}
                 scrollTargetId={layoutScrollTargetId ?? threadScrollTargetId}
                 threadHead={threadHeadMessage}
+                messageBodyAdornments={messageBodyAdornments}
                 videoReviewContextsByMessageId={
                   threadVideoReviewContextsByMessageId
                 }

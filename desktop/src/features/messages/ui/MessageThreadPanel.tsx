@@ -18,7 +18,6 @@ import {
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
 import { canManageMessageForCurrentUser } from "@/features/messages/lib/canManageMessage";
 import type { TimelineMessage } from "@/features/messages/types";
-import { useMessageMemoryStatusMap } from "@/features/dkg-memory/messageStatusMap";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { Channel } from "@/shared/api/types";
 import type { ThreadPanelLayoutProps } from "@/features/channels/lib/threadPanelLayout";
@@ -70,6 +69,8 @@ type MessageThreadPanelProps = ThreadPanelLayoutProps & {
     imetaMedia?: ImetaMedia[];
   } | null;
   isSending: boolean;
+  /** Feature-owned content rendered between each message body and reactions. */
+  messageBodyAdornments?: ReadonlyMap<string, React.ReactNode>;
   onCancelEdit?: () => void;
   onCancelReply: () => void;
   onClose: () => void;
@@ -204,6 +205,7 @@ export function MessageThreadPanel({
   isSinglePanelView = false,
   isFollowingThread,
   isMessageUnreadById,
+  messageBodyAdornments,
   onCancelEdit,
   onCancelReply,
   onClose,
@@ -375,11 +377,6 @@ export function MessageThreadPanel({
     () => deferredThreadReplies.map((entry) => entry.message),
     [deferredThreadReplies],
   );
-  const memoryMessages = React.useMemo(
-    () => (threadHead ? [threadHead, ...threadMessages] : threadMessages),
-    [threadHead, threadMessages],
-  );
-  const memoryStatuses = useMessageMemoryStatusMap(channelId, memoryMessages);
   const shouldShowThreadBranchGuides = React.useMemo(
     () => hasNestedThreadBranches(deferredThreadReplies),
     [deferredThreadReplies],
@@ -585,6 +582,7 @@ export function MessageThreadPanel({
             <div className="rounded-2xl">
               <MessageRow
                 actionBarPlacement="inside"
+                bodyAdornment={messageBodyAdornments?.get(threadHead.id)}
                 channelId={channelId}
                 huddleMemberPubkeys={huddleMemberPubkeys}
                 huddleMemberPubkeysPending={huddleMemberPubkeysPending}
@@ -592,7 +590,6 @@ export function MessageThreadPanel({
                 isUnread={isMessageUnreadById?.(threadHead.id)}
                 layoutVariant="thread-reply"
                 message={threadHead}
-                memoryStatus={memoryStatuses.get(threadHead.id)}
                 onDelete={
                   onDelete &&
                   canManageMessageForCurrentUser(
@@ -715,6 +712,9 @@ export function MessageThreadPanel({
                     >
                       {showUnreadDivider ? <UnreadDivider /> : null}
                       <MessageRow
+                        bodyAdornment={messageBodyAdornments?.get(
+                          entry.message.id,
+                        )}
                         channelId={channelId}
                         collapseDepthGuideActions={collapseDepthGuideActions}
                         collapseDescendantsLabel="Collapse replies"
@@ -743,7 +743,6 @@ export function MessageThreadPanel({
                         isUnread={isMessageUnreadById?.(entry.message.id)}
                         layoutVariant="thread-reply"
                         message={entry.message}
-                        memoryStatus={memoryStatuses.get(entry.message.id)}
                         onCollapseDepthGuide={handleCollapseDepthGuide}
                         onCollapseDepthGuideHoverChange={
                           handleCollapseBranchHoverChange
