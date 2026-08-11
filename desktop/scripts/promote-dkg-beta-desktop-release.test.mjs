@@ -87,6 +87,10 @@ const signature = require("node:fs").readFileSync(option("-x"), "utf8");
 process.exit(signature.slice(4) === archive.slice(8) ? 0 : 1);
 `;
 
+function updaterSignature(platform) {
+  return Buffer.from(`sig-${platform}`).toString("base64");
+}
+
 function manifest(version, mutate = (value) => value) {
   const model = dkgBetaAssets(version);
   const base = `https://github.com/OriginTrail/buzz-dkg-beta/releases/download/v${version}/`;
@@ -96,7 +100,10 @@ function manifest(version, mutate = (value) => value) {
     platforms: Object.fromEntries(
       Object.entries(model.platforms).map(([platform, { updaterArchive }]) => [
         platform,
-        { signature: `sig-${platform}`, url: `${base}${updaterArchive}` },
+        {
+          signature: updaterSignature(platform),
+          url: `${base}${updaterArchive}`,
+        },
       ]),
     ),
   });
@@ -143,7 +150,7 @@ function runPromotion({
     writeFileSync(join(state, "assets", updaterArchive), `archive-${platform}`);
     writeFileSync(
       join(state, "assets", `${updaterArchive}.sig`),
-      `sig-${platform}`,
+      updaterSignature(platform),
     );
   }
   const assets = releaseAssets ?? releaseAssetNames(version);

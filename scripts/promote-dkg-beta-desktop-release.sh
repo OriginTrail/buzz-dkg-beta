@@ -109,9 +109,15 @@ while IFS= read -r platform; do
   [[ "$manifest_signature" == "$published_signature" ]] || \
     fail "$CANDIDATE signature does not match $signature_asset for $platform"
 
+  # Tauri publishes updater signatures as a base64-encoded Minisign document.
+  # The updater consumes that encoded value directly, while minisign expects
+  # the decoded document when independently verifying the release payload.
+  decoded_signature="$asset_dir/${signature_asset}.minisig"
+  base64 --decode <"$asset_dir/$signature_asset" >"$decoded_signature" 2>/dev/null || \
+    fail "$signature_asset is not a valid Tauri updater signature for $platform"
   minisign -V -m "$asset_dir/$archive" \
     "${minisign_key_args[@]}" \
-    -x "$asset_dir/$signature_asset" >/dev/null || \
+    -x "$decoded_signature" >/dev/null || \
     fail "$signature_asset does not verify $archive for $platform"
 done < <(jq -r '.[]' <<<"$EXPECTED_PLATFORMS")
 
