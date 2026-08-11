@@ -169,7 +169,9 @@ function runPromotion({
       MOCK_TAG_SHA: tagSha,
       MOCK_TARGET_SHA: targetSha,
       MOCK_MINISIGN_INVALID: String(invalidSignature),
-      BUZZ_UPDATER_PUBLIC_KEY: "mock-public-key",
+      BUZZ_UPDATER_PUBLIC_KEY: Buffer.from(
+        "untrusted comment: minisign public key: mock\\nRWTmock",
+      ).toString("base64"),
     },
   });
   return {

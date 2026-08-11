@@ -19,6 +19,7 @@ command -v gh >/dev/null || fail "gh is required"
 command -v jq >/dev/null || fail "jq is required"
 command -v node >/dev/null || fail "node is required"
 command -v minisign >/dev/null || fail "minisign is required"
+command -v base64 >/dev/null || fail "base64 is required"
 [[ -n "${BUZZ_UPDATER_PUBLIC_KEY:-}" ]] || \
   fail "BUZZ_UPDATER_PUBLIC_KEY is required"
 
@@ -79,6 +80,14 @@ done < <(jq -r '.platforms[].url' "$candidate")
 
 asset_dir="$workdir/release-assets"
 mkdir -p "$asset_dir"
+public_key_file="$workdir/updater.pub"
+if printf '%s' "$BUZZ_UPDATER_PUBLIC_KEY" | base64 --decode >"$public_key_file" 2>/dev/null && \
+  grep -q '^untrusted comment: minisign public key:' "$public_key_file"; then
+  minisign_key_args=(-p "$public_key_file")
+else
+  rm -f "$public_key_file"
+  minisign_key_args=(-P "$BUZZ_UPDATER_PUBLIC_KEY")
+fi
 while IFS= read -r platform; do
   archive="$(jq -r --arg platform "$platform" \
     '.platforms[$platform].updaterArchive' <<<"$ASSET_MODEL")"
@@ -101,7 +110,7 @@ while IFS= read -r platform; do
     fail "$CANDIDATE signature does not match $signature_asset for $platform"
 
   minisign -V -m "$asset_dir/$archive" \
-    -P "$BUZZ_UPDATER_PUBLIC_KEY" \
+    "${minisign_key_args[@]}" \
     -x "$asset_dir/$signature_asset" >/dev/null || \
     fail "$signature_asset does not verify $archive for $platform"
 done < <(jq -r '.[]' <<<"$EXPECTED_PLATFORMS")
