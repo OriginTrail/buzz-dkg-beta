@@ -6,6 +6,7 @@ import { expect, test } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
+import { waitForMockLiveSubscription } from "../helpers/subscriptions";
 
 const SHOTS = "test-results/dkg-memory-hires";
 const CHANNEL = "engineering";
@@ -20,22 +21,6 @@ test.use({
   viewport: { width: 1920, height: 1080 },
   deviceScaleFactor: 2,
 });
-
-async function waitForMockLiveSubscription(
-  page: import("@playwright/test").Page,
-  channelName: string,
-) {
-  await expect
-    .poll(() =>
-      page.evaluate(
-        ({ channelName }) =>
-          window.__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({ channelName }) ??
-          false,
-        { channelName },
-      ),
-    )
-    .toBe(true);
-}
 
 test("hires: openclaw Traces + Graph", async ({ page }) => {
   await page.addInitScript((cg) => {

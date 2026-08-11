@@ -5,12 +5,28 @@
 // navigates away. Labels are inert text; no editing, no action execution.
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import type { DecisionEntry, GraphNode } from "../api";
 import { explorerSource } from "../api";
 import { useSubgraphGraph } from "../hooks";
 import { TopologyView } from "../topology/TopologyView";
 import type { TopologyTarget } from "../topology/client";
 import { GraphCanvas, type GraphSelection } from "./GraphCanvas";
 import { NodeUiResolve } from "./NodeUiResolve";
+
+export type GraphOverlayTarget =
+  | TopologyTarget
+  | { kind: "channel-decisions"; decisions: DecisionEntry[] };
+
+function decisionsToNodes(decisions: DecisionEntry[]): GraphNode[] {
+  return decisions.map((decision) => ({
+    id: decision.uri,
+    kind: "decision",
+    label: decision.name ?? decision.uri.split("/").pop() ?? decision.uri,
+    at: decision.at
+      ? Math.floor(new Date(decision.at).getTime() / 1_000) || null
+      : null,
+  }));
+}
 
 const LAYER_META = {
   WM: { label: "Draft — only on this node", dot: "bg-slate-400" },
@@ -32,10 +48,11 @@ export function GraphOverlay({
 }: {
   channelId: string;
   cg: string | null;
-  target: TopologyTarget;
+  target: GraphOverlayTarget;
   onClose: () => void;
 }) {
   const channelWide = target.kind === "channel";
+  const decisionsOnly = target.kind === "channel-decisions";
   const subgraph = target.kind === "subgraph" ? target.name : null;
   const graph = useSubgraphGraph(channelId, cg, subgraph);
   const [selection, setSelection] = useState<GraphSelection | null>(null);
@@ -53,7 +70,13 @@ export function GraphOverlay({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const data = graph.data;
+  const fallbackNodes = useMemo(
+    () => (decisionsOnly ? decisionsToNodes(target.decisions) : []),
+    [decisionsOnly, target],
+  );
+  const data = decisionsOnly
+    ? { gate: "ok" as const, nodes: fallbackNodes, edges: [] }
+    : graph.data;
   const nodes = useMemo(() => data?.nodes ?? [], [data]);
   const edges = useMemo(() => data?.edges ?? [], [data]);
 
@@ -72,7 +95,11 @@ export function GraphOverlay({
     >
       <header className="flex items-center gap-3 border-b border-border py-2 pl-20 pr-4">
         <h2 className="text-sm font-semibold">
-          {channelWide ? "Channel knowledge graph" : subgraph}
+          {channelWide
+            ? "Channel knowledge graph"
+            : decisionsOnly
+              ? "All decisions"
+              : subgraph}
           {!channelWide && (
             <span className="ml-2 font-normal text-muted-foreground">
               {decisionCount} decisions · {evidenceCount} evidence
@@ -117,14 +144,16 @@ export function GraphOverlay({
             >
               Traces
             </button>
-            <button
-              type="button"
-              onClick={() => setMode("topology")}
-              data-testid="dkg-topology-toggle"
-              className={`rounded-r-md px-2 py-1 ${mode === "topology" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
-            >
-              ⬡ Graph
-            </button>
+            {!decisionsOnly && (
+              <button
+                type="button"
+                onClick={() => setMode("topology")}
+                data-testid="dkg-topology-toggle"
+                className={`rounded-r-md px-2 py-1 ${mode === "topology" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
+              >
+                ⬡ Graph
+              </button>
+            )}
           </div>
         )}
         <button
@@ -163,7 +192,7 @@ export function GraphOverlay({
               onSelect={setSelection}
             />
           )}
-          {mode === "topology" && (
+          {mode === "topology" && target.kind !== "channel-decisions" && (
             <TopologyView
               channelId={channelId}
               cg={cg}
