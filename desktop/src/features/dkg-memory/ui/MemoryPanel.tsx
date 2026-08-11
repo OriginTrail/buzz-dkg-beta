@@ -15,6 +15,7 @@ import { explorerSource, nodeUiDeepLink } from "../api";
 import { EvidenceCard } from "./EvidenceCard";
 import { GraphOverlay } from "./GraphOverlay";
 import { SoftwareMemoryQuery } from "./SoftwareMemoryQuery";
+import { ALL_DECISIONS_LENS } from "./GraphOverlay";
 
 // Humanized layer names per the 2026-08-02 humanize wrap (Hermes' table,
 // seconded by OpenClaw): reach + durability in plain words, technical
@@ -224,6 +225,35 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
       )}
 
       {/* Subgraph lenses */}
+      {/* Fallback launch point: when the context graph has captured decisions
+          but no per-participant sub-graphs (e.g. a capture daemon that writes
+          flat assertions), the Topics chips never render and there is no way
+          into the Traces/Graph overlay. Offer an "All decisions" timeline
+          built directly from the decisions list — client-only, no extra
+          provider query. Sub-graphs, when present, are always preferred. */}
+      {sortedDecisions.length > 0 &&
+        (data.subgraphs ?? []).filter((sg) => sg.entityCount > 0).length ===
+          0 && (
+          <section className="mb-3">
+            <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Timeline
+            </h4>
+            <button
+              type="button"
+              onClick={() => setGraphSubgraph(ALL_DECISIONS_LENS)}
+              className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-xs transition-colors hover:border-primary/60 hover:bg-muted"
+              title="Open all captured decisions as a Traces timeline"
+              data-testid="dkg-subgraph-all-decisions"
+            >
+              All decisions
+              <span className="ml-1 text-muted-foreground tabular-nums">
+                {sortedDecisions.length}
+              </span>
+              <span className="ml-1 text-muted-foreground">→</span>
+            </button>
+          </section>
+        )}
+
       {data.subgraphs && data.subgraphs.length > 0 && (
         <section className="mb-3">
           <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -310,6 +340,9 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
           channelId={channelId}
           cg={cg}
           subgraph={graphSubgraph}
+          fallbackDecisions={
+            graphSubgraph === ALL_DECISIONS_LENS ? sortedDecisions : undefined
+          }
           onClose={() => setGraphSubgraph(null)}
         />
       )}

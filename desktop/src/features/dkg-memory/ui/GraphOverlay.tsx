@@ -5,11 +5,31 @@
 // navigates away. Labels are inert text; no editing, no action execution.
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import type { DecisionEntry, GraphNode } from "../api";
 import { explorerSource } from "../api";
 import { useSubgraphGraph } from "../hooks";
 import { TopologyView } from "../topology/TopologyView";
 import { GraphCanvas, type GraphSelection } from "./GraphCanvas";
 import { NodeUiResolve } from "./NodeUiResolve";
+
+/**
+ * Sentinel sub-graph name for the fallback timeline: a client-only Traces view
+ * built from the channel-memory `decisions` list, used when the context graph
+ * has captured decisions but exposes no per-participant sub-graphs (so there
+ * would otherwise be no launch point into Traces/Graph). Not a real sub-graph
+ * — no provider query is issued for it.
+ */
+export const ALL_DECISIONS_LENS = "__all_decisions__";
+
+/** Map channel-memory decisions to Traces nodes (no evidence edges available). */
+function decisionsToNodes(decisions: DecisionEntry[]): GraphNode[] {
+  return decisions.map((d) => ({
+    id: d.uri,
+    kind: "decision" as const,
+    label: d.name ?? d.uri.split("/").pop() ?? d.uri,
+    at: d.at ? Math.floor(new Date(d.at).getTime() / 1000) || null : null,
+  }));
+}
 
 const LAYER_META = {
   WM: { label: "Draft — only on this node", dot: "bg-slate-400" },
@@ -27,17 +47,25 @@ export function GraphOverlay({
   channelId,
   cg,
   subgraph,
+  fallbackDecisions,
   onClose,
 }: {
   channelId: string;
   cg: string | null;
   subgraph: string;
+  /** When set (fallback lens), Traces is built from these instead of a query. */
+  fallbackDecisions?: DecisionEntry[];
   onClose: () => void;
 }) {
-  const graph = useSubgraphGraph(channelId, cg, subgraph);
+  const isFallback =
+    subgraph === ALL_DECISIONS_LENS && fallbackDecisions !== undefined;
+  // Skip the provider query entirely in fallback mode (no such sub-graph).
+  const graph = useSubgraphGraph(channelId, cg, isFallback ? null : subgraph);
   const [selection, setSelection] = useState<GraphSelection | null>(null);
   // Spine is the first paint; topology (hexagonal RdfGraph) mounts only on
   // this explicit scoped action — per the repurpose wrap's acceptance gate.
+  // The hexagonal Graph needs per-sub-graph triples, which the fallback lens
+  // has no source for, so fallback mode is Traces-only.
   const [mode, setMode] = useState<"spine" | "topology">("spine");
 
   useEffect(() => {
@@ -48,7 +76,13 @@ export function GraphOverlay({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const data = graph.data;
+  const fallbackNodes = useMemo(
+    () => (isFallback ? decisionsToNodes(fallbackDecisions ?? []) : []),
+    [isFallback, fallbackDecisions],
+  );
+  const data = isFallback
+    ? { gate: "ok" as const, nodes: fallbackNodes, edges: [] }
+    : graph.data;
   const nodes = useMemo(() => data?.nodes ?? [], [data]);
   const edges = useMemo(() => data?.edges ?? [], [data]);
 
@@ -67,7 +101,7 @@ export function GraphOverlay({
     >
       <header className="flex items-center gap-3 border-b border-border py-2 pl-20 pr-4">
         <h2 className="text-sm font-semibold">
-          {subgraph}
+          {isFallback ? "All decisions" : subgraph}
           <span className="ml-2 font-normal text-muted-foreground">
             {decisionCount} decisions · {evidenceCount} evidence
           </span>
@@ -100,6 +134,8 @@ export function GraphOverlay({
         </div>
         <div className="flex-1" />
         <div className="mr-2 flex rounded-md border border-border text-xs">
+          {/* Fallback lens has no per-sub-graph triples, so the hexagonal
+              Graph mode is unavailable — Traces only. */}
           <button
             type="button"
             onClick={() => setMode("spine")}
@@ -107,14 +143,16 @@ export function GraphOverlay({
           >
             Traces
           </button>
-          <button
-            type="button"
-            onClick={() => setMode("topology")}
-            data-testid="dkg-topology-toggle"
-            className={`rounded-r-md px-2 py-1 ${mode === "topology" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
-          >
-            ⬡ Graph
-          </button>
+          {!isFallback && (
+            <button
+              type="button"
+              onClick={() => setMode("topology")}
+              data-testid="dkg-topology-toggle"
+              className={`rounded-r-md px-2 py-1 ${mode === "topology" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
+            >
+              ⬡ Graph
+            </button>
+          )}
         </div>
         <button
           type="button"
