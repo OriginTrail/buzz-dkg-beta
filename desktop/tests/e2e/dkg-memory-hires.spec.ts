@@ -11,6 +11,11 @@ const SHOTS = "test-results/dkg-memory-hires";
 const CHANNEL = "engineering";
 const WOT_CG = "0x633E5a7C5e612d9981538F60D824cC03be97e2Ab/web-of-trust";
 
+test.skip(
+  Boolean(process.env.CI),
+  "manual high-resolution capture requires a reachable DKG provider",
+);
+
 test.use({
   viewport: { width: 1920, height: 1080 },
   deviceScaleFactor: 2,
