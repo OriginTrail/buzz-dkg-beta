@@ -236,7 +236,8 @@ jobs:
           [[ -n "$DEB" ]] || { echo "::error::No Debian package found"; exit 1; }
           [[ -n "$APPIMAGE" ]] || { echo "::error::No AppImage found"; exit 1; }
           [[ -f "${APPIMAGE}.sig" ]] || { echo "::error::No AppImage updater signature found"; exit 1; }
-          RENAMED="$BUNDLE_ROOT/appimage/Buzz-DKG-Beta_${VERSION}_x86_64.AppImage"
+          ASSET_NAME=$(node desktop/scripts/dkg-beta-assets.mjs "$VERSION" --asset linux-x86_64)
+          RENAMED="$BUNDLE_ROOT/appimage/$ASSET_NAME"
           mv "$APPIMAGE" "$RENAMED"
           mv "${APPIMAGE}.sig" "${RENAMED}.sig"
         env:
@@ -311,7 +312,8 @@ jobs:
           EXE=$(find "$BUNDLE_ROOT/nsis" -name '*.exe' -type f | head -1)
           [[ -n "$EXE" ]] || { echo "::error::No NSIS installer found"; exit 1; }
           [[ -f "${EXE}.sig" ]] || { echo "::error::No NSIS updater signature found"; exit 1; }
-          RENAMED="$BUNDLE_ROOT/nsis/Buzz-DKG-Beta_${VERSION}_x86_64-setup.exe"
+          ASSET_NAME=$(node desktop/scripts/dkg-beta-assets.mjs "$VERSION" --asset windows-x86_64)
+          RENAMED="$BUNDLE_ROOT/nsis/$ASSET_NAME"
           mv "$EXE" "$RENAMED"
           mv "${EXE}.sig" "${RENAMED}.sig"
         env:
@@ -369,10 +371,11 @@ jobs:
       - name: Generate signed updater candidate
         run: |
           set -euo pipefail
-          MAC_ARM="dist/Buzz-DKG-Beta_${VERSION}_aarch64.app.tar.gz"
-          MAC_X64="dist/Buzz-DKG-Beta_${VERSION}_x86_64.app.tar.gz"
-          LINUX="dist/Buzz-DKG-Beta_${VERSION}_x86_64.AppImage"
-          WINDOWS="dist/Buzz-DKG-Beta_${VERSION}_x86_64-setup.exe"
+          ASSET_MODEL=$(node desktop/scripts/dkg-beta-assets.mjs "$VERSION")
+          MAC_ARM="dist/$(jq -r '.platforms["darwin-aarch64"].updaterArchive' <<<"$ASSET_MODEL")"
+          MAC_X64="dist/$(jq -r '.platforms["darwin-x86_64"].updaterArchive' <<<"$ASSET_MODEL")"
+          LINUX="dist/$(jq -r '.platforms["linux-x86_64"].updaterArchive' <<<"$ASSET_MODEL")"
+          WINDOWS="dist/$(jq -r '.platforms["windows-x86_64"].updaterArchive' <<<"$ASSET_MODEL")"
           for archive in "$MAC_ARM" "$MAC_X64" "$LINUX" "$WINDOWS"; do
             [[ -f "$archive" ]] || { echo "::error::Missing updater archive: $archive"; exit 1; }
             [[ -f "${archive}.sig" ]] || { echo "::error::Missing updater signature: ${archive}.sig"; exit 1; }

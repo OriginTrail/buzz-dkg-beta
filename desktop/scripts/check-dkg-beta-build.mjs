@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DKG_BETA_PLATFORM_ORDER, dkgBetaAssets } from "./dkg-beta-assets.mjs";
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(desktopRoot, "..");
@@ -22,7 +23,6 @@ const promotionWorkflow = read(
 );
 const promotionScript = read("scripts/promote-dkg-beta-desktop-release.sh");
 const desktopGuide = read("docs/dkg-beta-desktop.md");
-const updaterHook = read("desktop/src/features/settings/hooks/use-updater.ts");
 const betaEnv = read("desktop/.env.dkg-beta");
 const acp = read("crates/buzz-acp/src/lib.rs");
 const cliMemory = read("crates/buzz-cli/src/commands/memory.rs");
@@ -31,6 +31,7 @@ const relayMemory = read("crates/buzz-relay/src/api/dkg_memory.rs");
 const commandDiscovery = read(
   "desktop/src-tauri/src/managed_agents/discovery.rs",
 );
+const assetModel = dkgBetaAssets("0.5.7-dkg-beta.999");
 
 function check(condition, message) {
   if (!condition) throw new Error(`DKG beta build contract: ${message}`);
@@ -39,6 +40,14 @@ function check(condition, message) {
 check(
   config.productName === "Buzz DKG Beta",
   "product name must remain isolated",
+);
+check(
+  Object.keys(assetModel.platforms).join(",") ===
+    DKG_BETA_PLATFORM_ORDER.join(",") &&
+    Object.values(assetModel.platforms).every(({ updaterArchive }) =>
+      updaterArchive.startsWith("Buzz-DKG-Beta_0.5.7-dkg-beta.999_"),
+    ),
+  "the canonical platform asset model is incomplete",
 );
 check(
   config.identifier === "io.origintrail.buzz.dkgbeta",
@@ -83,6 +92,12 @@ check(
 check(
   betaEnv.includes("VITE_BUZZ_DKG_BETA=true"),
   "the beta disclosure flag must be enabled",
+);
+check(
+  betaEnv.includes(
+    "VITE_BUZZ_RELEASES_URL=https://github.com/OriginTrail/buzz-dkg-beta/releases",
+  ),
+  "the beta build flavor must select the OriginTrail releases channel",
 );
 check(
   macosBuildScript.includes("--no-default-features"),
@@ -131,6 +146,7 @@ for (const required of [
   "build-dkg-beta-linux.sh",
   "build-dkg-beta-windows.sh",
   "build-dkg-beta-release-config.mjs",
+  "dkg-beta-assets.mjs",
   "TAURI_SIGNING_PRIVATE_KEY",
   "updater-manifest.json",
   "buzz-dkg-beta-latest/latest.json",
@@ -148,7 +164,7 @@ check(
   promotionScript.includes("OriginTrail/buzz-dkg-beta") &&
     promotionScript.includes('ROLLING_TAG="buzz-dkg-beta-latest"') &&
     promotionScript.includes("refusing downgrade") &&
-    promotionScript.includes("EXPECTED_PLATFORMS"),
+    promotionScript.includes("dkg-beta-assets.mjs"),
   "promotion must be repository-bound, complete, and downgrade-safe",
 );
 check(
@@ -159,10 +175,6 @@ check(
 check(
   !workflow.includes('gh release upload "buzz-dkg-beta-latest"'),
   "publishing an immutable release must not automatically promote it",
-);
-check(
-  updaterHook.includes("OriginTrail/buzz-dkg-beta/releases"),
-  "manual updates must link to the OriginTrail beta releases",
 );
 check(
   desktopGuide.includes("Windows Credential Manager") &&

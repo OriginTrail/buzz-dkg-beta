@@ -30,8 +30,9 @@ const BACKGROUND_BLOCKED_STATES = new Set<UpdateStatus["state"]>([
   "manual-required",
 ]);
 
-const GITHUB_RELEASES_URL =
-  "https://github.com/OriginTrail/buzz-dkg-beta/releases";
+const DEFAULT_RELEASES_URL = "https://github.com/block/buzz/releases";
+const RELEASES_URL =
+  import.meta.env.VITE_BUZZ_RELEASES_URL?.trim() || DEFAULT_RELEASES_URL;
 
 function toErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -169,7 +170,7 @@ export function useUpdater() {
             setStatus({
               state: "manual-required",
               version: update.version,
-              releaseUrl: GITHUB_RELEASES_URL,
+              releaseUrl: RELEASES_URL,
             });
           }
         } else if (shouldShowQuietResult) {

@@ -8,7 +8,6 @@ REPOSITORY="${GITHUB_REPOSITORY:-OriginTrail/buzz-dkg-beta}"
 TAG="v${VERSION}"
 CANDIDATE="updater-manifest.json"
 ROLLING_TAG="buzz-dkg-beta-latest"
-EXPECTED_PLATFORMS='["darwin-aarch64","darwin-x86_64","linux-x86_64","windows-x86_64"]'
 
 fail() { echo "::error::$*" >&2; exit 1; }
 
@@ -18,6 +17,10 @@ fail() { echo "::error::$*" >&2; exit 1; }
   fail "version must match X.Y.Z-dkg-beta.N"
 command -v gh >/dev/null || fail "gh is required"
 command -v jq >/dev/null || fail "jq is required"
+command -v node >/dev/null || fail "node is required"
+
+ASSET_MODEL="$(node desktop/scripts/dkg-beta-assets.mjs "$VERSION")"
+EXPECTED_PLATFORMS="$(jq -c '.platforms | keys' <<<"$ASSET_MODEL")"
 
 version_rank() {
   local version="$1"
@@ -53,11 +56,13 @@ base_url="https://github.com/$REPOSITORY/releases/download/$TAG/"
 jq -e \
   --arg version "$VERSION" \
   --arg base "$base_url" \
+  --argjson assets "$ASSET_MODEL" \
   --argjson expected "$EXPECTED_PLATFORMS" '
     .version == $version and
     (.platforms | keys == $expected) and
     ([.platforms[] | (.signature | type == "string" and length > 0)] | all) and
-    ([.platforms[] | (.url | type == "string" and startswith($base))] | all)
+    ([.platforms | to_entries[] | . as $entry |
+      ($entry.value.url == ($base + $assets.platforms[$entry.key].updaterArchive))] | all)
   ' "$candidate" >/dev/null || \
   fail "$CANDIDATE failed version, platform, signature, or URL validation"
 
