@@ -21,7 +21,7 @@ on:
       source_sha:
         description: Immutable full SHA expected at source_ref
         required: true
-        default: 829d8852496c82f577e3e25de4a9361f612459af
+        default: 021b3cefa02aa7161e7fb41c3af7679b510c36dc
         type: string
 
 concurrency:
