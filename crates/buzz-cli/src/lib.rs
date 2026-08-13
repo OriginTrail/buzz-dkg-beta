@@ -1794,6 +1794,15 @@ pub enum MemoryCmd {
         /// JSON proposal file, or '-' to read JSON from stdin
         #[arg(long, default_value = "-")]
         input: String,
+        /// Idempotency ledger for unattended loops: a JSON file recording the
+        /// evidence sets already proposed. A repeat of the same channel and
+        /// sources is skipped instead of double-writing the graph, so a retry,
+        /// crash, or replay after restart is safe.
+        #[arg(long, value_name = "PATH")]
+        dedupe_state: Option<String>,
+        /// Propose even if --dedupe-state already recorded this evidence set
+        #[arg(long)]
+        force: bool,
     },
     /// Run a safe, read-only SPARQL query against the current channel's DKG memory
     Query {
@@ -2326,7 +2335,7 @@ mod tests {
             vec!["create", "get", "list", "status"]
         );
         assert_eq!(names(&cmd, "media"), vec!["get"]);
-        assert_eq!(names(&cmd, "memory"), vec!["propose"]);
+        assert_eq!(names(&cmd, "memory"), vec!["propose", "query"]);
         assert_eq!(names(&cmd, "upload"), vec!["file"]);
         assert_eq!(names(&cmd, "pack"), vec!["inspect", "validate"]);
         assert_eq!(
@@ -2356,7 +2365,7 @@ mod tests {
             ("issues", 4),
             ("media", 1),
             ("messages", 8),
-            ("memory", 1),
+            ("memory", 2),
             ("pack", 2),
             ("patches", 4),
             ("pr", 5),
