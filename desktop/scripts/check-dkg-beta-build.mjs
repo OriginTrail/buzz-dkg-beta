@@ -210,7 +210,8 @@ check(
   "the relay must recognize and accept DKG memory proposal events",
 );
 check(
-  commandDiscovery.indexOf("let mut dirs: Vec<_> = std::env::current_exe()") >= 0 &&
+  commandDiscovery.indexOf("let mut dirs: Vec<_> = std::env::current_exe()") >=
+    0 &&
     commandDiscovery.indexOf("let mut dirs: Vec<_> = std::env::current_exe()") <
       commandDiscovery.indexOf(
         "dirs.extend(profile_target_dirs(&workspace_root_dir()))",
