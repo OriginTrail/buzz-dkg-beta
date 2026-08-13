@@ -138,6 +138,42 @@ same items. This is what a first-time tester sees with zero infrastructure.
    membership and channel visibility before forwarding an allowlisted read to
    its protected DKG gateway. Receipt discovery is the final fallback.
 
+### Autonomous post-turn ingestion (reference loop)
+
+Because step 1 needs no operator action, a channel's memory should grow on its
+own. When it stops growing while the channel keeps talking, the usual cause is
+that nobody is proposing — the community has fallen back to typing
+`@dkg distill` by hand, and the graph then lags the conversation by however long
+it has been since someone remembered.
+
+The reference loop for a participating agent, after each substantive turn:
+
+```bash
+buzz memory propose \
+  --channel "$CHANNEL_UUID" \
+  --source "$INPUT_EVENT_ID" --source "$OUTPUT_EVENT_ID" \
+  --dedupe-state "$STATE_DIR/proposed.json" \
+  --input turn-proposal.json
+```
+
+- **Cite real evidence.** Every `--source` is a signed event the agent actually
+  reasoned over (1..=16 of them). The relay re-verifies that binding, so an
+  unsupported claim is rejected rather than quietly recorded.
+- **One proposal per turn, not per message.** Debounce in the agent loop: let a
+  thread settle, then propose once for the events it covered.
+- **`--dedupe-state` makes the loop restart-safe.** The ledger is keyed by the
+  channel plus the (order-insensitive) evidence set, so a retry, a crash, or a
+  replay after restart is skipped instead of double-writing the graph. The
+  ledger is written atomically and only *after* the relay accepts, so a
+  transient failure never suppresses a turn that never landed. Pass `--force`
+  to deliberately re-propose.
+- **Exit codes stay meaningful.** A skipped duplicate is success (`0`) with
+  `{"status":"skipped"}` on stdout, so an unattended scheduler can run the same
+  command repeatedly without special-casing.
+
+`@dkg distill` remains available for manual control, but a community that
+depends on it will keep seeing its Context Graph fall behind.
+
 ### Versioned semantic profiles
 
 The relay advertises the exact proposal schema and ontology profiles it

@@ -172,7 +172,19 @@ pub async fn dispatch(command: MemoryCmd, client: &BuzzClient) -> Result<(), Cli
             channel,
             source,
             input,
-        } => propose(client, &channel, &source, &input).await,
+            dedupe_state,
+            force,
+        } => {
+            propose(
+                client,
+                &channel,
+                &source,
+                &input,
+                dedupe_state.as_deref(),
+                force,
+            )
+            .await
+        }
         MemoryCmd::Query {
             channel,
             input,
@@ -253,11 +265,90 @@ fn validate_proposal_content(content: &str) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Stable idempotency key for one proposal: the channel plus its evidence set.
+///
+/// Sources are lowercased, de-duplicated, and sorted first, so the key does not
+/// depend on the order an agent happened to collect its evidence. Re-proposing
+/// the same evidence for the same channel is the definition of a duplicate
+/// write, which is what an unattended loop must never do after a retry or a
+/// restart.
+fn dedupe_key(channel: &str, sources: &[String]) -> String {
+    let mut ids: Vec<String> = sources
+        .iter()
+        .map(|source| source.to_ascii_lowercase())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    format!("{}:{}", channel.to_ascii_lowercase(), ids.join(","))
+}
+
+/// Read the ledger, tolerating a missing file (first run) but not a corrupt one:
+/// silently treating an unreadable ledger as empty would re-enable the exact
+/// double-write this flag exists to prevent.
+fn read_dedupe_state(path: &std::path::Path) -> Result<HashSet<String>, CliError> {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(error) => {
+            return Err(CliError::Other(format!(
+                "cannot read --dedupe-state {}: {error}",
+                path.display()
+            )))
+        }
+    };
+    if raw.trim().is_empty() {
+        return Ok(HashSet::new());
+    }
+    serde_json::from_str::<Vec<String>>(&raw)
+        .map(HashSet::from_iter)
+        .map_err(|error| {
+            CliError::Other(format!(
+                "--dedupe-state {} is not a JSON array of strings: {error}",
+                path.display()
+            ))
+        })
+}
+
+/// Persist the ledger atomically (temp file in the same directory, then rename)
+/// so a crash mid-write cannot truncate it into an empty, permissive state.
+fn write_dedupe_state(path: &std::path::Path, keys: &HashSet<String>) -> Result<(), CliError> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            CliError::Other(format!(
+                "cannot create --dedupe-state directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    let mut ordered: Vec<&String> = keys.iter().collect();
+    ordered.sort();
+    let body = serde_json::to_string_pretty(&ordered)
+        .map_err(|error| CliError::Other(format!("cannot serialize --dedupe-state: {error}")))?;
+    let temp = path.with_extension("tmp");
+    std::fs::write(&temp, body).map_err(|error| {
+        CliError::Other(format!(
+            "cannot write --dedupe-state {}: {error}",
+            temp.display()
+        ))
+    })?;
+    std::fs::rename(&temp, path).map_err(|error| {
+        CliError::Other(format!(
+            "cannot replace --dedupe-state {}: {error}",
+            path.display()
+        ))
+    })
+}
+
 async fn propose(
     client: &BuzzClient,
     channel: &str,
     sources: &[String],
     input: &str,
+    dedupe_state: Option<&str>,
+    force: bool,
 ) -> Result<(), CliError> {
     validate_uuid(channel)?;
     if sources.is_empty() || sources.len() > MAX_SOURCES {
@@ -270,6 +361,26 @@ async fn propose(
         validate_hex64(source)?;
         if !unique.insert(source.to_ascii_lowercase()) {
             return Err(CliError::Usage("duplicate --source event id".into()));
+        }
+    }
+    // Consult the ledger before reading stdin or signing: an already-proposed
+    // evidence set must cost nothing and, above all, must not reach the relay.
+    let ledger_path = dedupe_state.map(std::path::PathBuf::from);
+    let key = dedupe_key(channel, sources);
+    let mut proposed: HashSet<String> = HashSet::new();
+    if let Some(path) = ledger_path.as_deref() {
+        proposed = read_dedupe_state(path)?;
+        if !force && proposed.contains(&key) {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "skipped",
+                    "reason": "already proposed for this channel and source set",
+                    "channel": channel,
+                    "sources": sources,
+                })
+            );
+            return Ok(());
         }
     }
     let content = read_file_or_stdin(input)?;
@@ -292,6 +403,12 @@ async fn propose(
     let value = serde_json::to_value(event)
         .map_err(|error| CliError::Other(format!("proposal serialization failed: {error}")))?;
     let response = client.post_authed_json("/api/dkg/memory", &value).await?;
+    // Record only after the relay accepted the proposal. Recording earlier would
+    // let a transient failure permanently suppress a turn that never landed.
+    if let Some(path) = ledger_path.as_deref() {
+        proposed.insert(key);
+        write_dedupe_state(path, &proposed)?;
+    }
     println!("{response}");
     Ok(())
 }
@@ -322,6 +439,60 @@ mod tests {
             r#"{"schemaVersion":2,"profiles":["dkg-memory@1"],"summary":"x","entities":[{"id":"one","type":"memory:Entity","name":"One"}],"relations":[{"subject":"one","predicate":"memory:about","object":"missing"}]}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn dedupe_key_ignores_source_order_case_and_repeats() {
+        let a = dedupe_key(
+            "0b6b1f1a-2c3d-4e5f-8a9b-0c1d2e3f4a5b",
+            &["AA".repeat(32), "bb".repeat(32)],
+        );
+        let b = dedupe_key(
+            "0b6b1f1a-2c3d-4e5f-8a9b-0c1d2e3f4a5b",
+            &["bb".repeat(32), "aa".repeat(32), "aa".repeat(32)],
+        );
+        assert_eq!(a, b, "evidence order and case must not change the key");
+        let other = dedupe_key(
+            "1c7c2f2b-3d4e-5f6a-9b0c-1d2e3f4a5b6c",
+            &["aa".repeat(32), "bb".repeat(32)],
+        );
+        assert_ne!(a, other, "a different channel must not collide");
+    }
+
+    #[test]
+    fn dedupe_state_roundtrips_and_survives_a_missing_file() {
+        let dir = std::env::temp_dir().join(format!("buzz-dedupe-{}", std::process::id()));
+        let path = dir.join("state.json");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // A first run has no ledger yet; that is not an error.
+        assert!(read_dedupe_state(&path)
+            .expect("missing ledger reads empty")
+            .is_empty());
+
+        let mut keys = HashSet::new();
+        keys.insert("channel:aaa".to_string());
+        keys.insert("channel:bbb".to_string());
+        write_dedupe_state(&path, &keys).expect("write ledger");
+        assert_eq!(read_dedupe_state(&path).expect("read ledger"), keys);
+
+        // No stray temp file is left behind by the atomic replace.
+        assert!(!path.with_extension("tmp").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupt_dedupe_state_is_an_error_not_a_silent_empty_ledger() {
+        let dir = std::env::temp_dir().join(format!("buzz-dedupe-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("state.json");
+        std::fs::write(&path, "{ not an array }").expect("seed corrupt ledger");
+
+        // Treating this as empty would re-enable duplicate writes.
+        assert!(read_dedupe_state(&path).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
