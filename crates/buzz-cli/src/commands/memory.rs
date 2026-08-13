@@ -234,6 +234,18 @@ fn validate_proposal_content(content: &str) -> Result<(), CliError> {
             "memory proposal JSON exceeds the 65536-byte limit".into(),
         ));
     }
+    // Structural safety (agent-panel decision): a shared memory proposal must
+    // never carry key material. This is a cheap tripwire, not a policy engine —
+    // selection policy stays in the agent loop.
+    let lowered = content.to_ascii_lowercase();
+    if lowered.contains("nsec1")
+        || lowered.contains("private_key")
+        || lowered.contains("privatekey")
+    {
+        return Err(CliError::Usage(
+            "memory proposal content appears to contain key material; refusing to propose".into(),
+        ));
+    }
     let value: serde_json::Value = serde_json::from_str(content)
         .map_err(|error| CliError::Usage(format!("memory proposal is not valid JSON: {error}")))?;
     let object = value
@@ -282,13 +294,80 @@ fn dedupe_key(channel: &str, sources: &[String]) -> String {
     format!("{}:{}", channel.to_ascii_lowercase(), ids.join(","))
 }
 
+/// Two-phase ledger.
+///
+/// `pending` is written *before* the proposal is posted and cleared only once
+/// the outcome is known. A crash between the post and the bookkeeping therefore
+/// leaves a `pending` key behind, and the next run refuses to post that
+/// evidence again instead of silently duplicating it. This is at-least-once
+/// delivery made *visible*; exactly-once needs the relay to reject a repeated
+/// (channel, evidence set), which no client-side ledger can provide.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct DedupeLedger {
+    #[serde(default)]
+    accepted: HashSet<String>,
+    #[serde(default)]
+    pending: HashSet<String>,
+}
+
+/// Exclusive advisory lock so two schedulers cannot both observe an absent key
+/// and both post. `create_new` is atomic on POSIX and Windows; the lock is
+/// released on every exit path, including errors, by `Drop`.
+struct LedgerLock {
+    path: std::path::PathBuf,
+}
+
+impl LedgerLock {
+    fn acquire(ledger: &std::path::Path) -> Result<Self, CliError> {
+        let path = ledger.with_extension("lock");
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                CliError::Other(format!(
+                    "cannot create --dedupe-state directory {}: {error}",
+                    parent.display()
+                ))
+            })?;
+        }
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                use std::io::Write;
+                let _ = writeln!(file, "pid {}", std::process::id());
+                Ok(Self { path })
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                Err(CliError::Other(format!(
+                    "another proposer holds {}; if no proposer is running, remove that file",
+                    path.display()
+                )))
+            }
+            Err(error) => Err(CliError::Other(format!(
+                "cannot lock --dedupe-state {}: {error}",
+                path.display()
+            ))),
+        }
+    }
+}
+
+impl Drop for LedgerLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// Read the ledger, tolerating a missing file (first run) but not a corrupt one:
 /// silently treating an unreadable ledger as empty would re-enable the exact
-/// double-write this flag exists to prevent.
-fn read_dedupe_state(path: &std::path::Path) -> Result<HashSet<String>, CliError> {
+/// double-write this flag exists to prevent. A bare JSON array is accepted as
+/// the earlier accepted-only format.
+fn read_dedupe_state(path: &std::path::Path) -> Result<DedupeLedger, CliError> {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DedupeLedger::default())
+        }
         Err(error) => {
             return Err(CliError::Other(format!(
                 "cannot read --dedupe-state {}: {error}",
@@ -297,49 +376,225 @@ fn read_dedupe_state(path: &std::path::Path) -> Result<HashSet<String>, CliError
         }
     };
     if raw.trim().is_empty() {
-        return Ok(HashSet::new());
+        return Ok(DedupeLedger::default());
     }
-    serde_json::from_str::<Vec<String>>(&raw)
-        .map(HashSet::from_iter)
-        .map_err(|error| {
-            CliError::Other(format!(
-                "--dedupe-state {} is not a JSON array of strings: {error}",
-                path.display()
-            ))
-        })
+    if let Ok(legacy) = serde_json::from_str::<Vec<String>>(&raw) {
+        return Ok(DedupeLedger {
+            accepted: legacy.into_iter().collect(),
+            pending: HashSet::new(),
+        });
+    }
+    serde_json::from_str::<DedupeLedger>(&raw).map_err(|error| {
+        CliError::Other(format!(
+            "--dedupe-state {} is not a recognized ledger: {error}",
+            path.display()
+        ))
+    })
 }
 
-/// Persist the ledger atomically (temp file in the same directory, then rename)
-/// so a crash mid-write cannot truncate it into an empty, permissive state.
-fn write_dedupe_state(path: &std::path::Path, keys: &HashSet<String>) -> Result<(), CliError> {
-    if let Some(parent) = path
+/// Persist the ledger durably: owner-only permissions, a process-unique temp
+/// file (a shared temp name races between concurrent writers), fsync before the
+/// rename, and an fsync of the directory so the rename itself survives a crash.
+fn write_dedupe_state(path: &std::path::Path, ledger: &DedupeLedger) -> Result<(), CliError> {
+    let parent = path
         .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        std::fs::create_dir_all(parent).map_err(|error| {
-            CliError::Other(format!(
-                "cannot create --dedupe-state directory {}: {error}",
-                parent.display()
-            ))
-        })?;
-    }
-    let mut ordered: Vec<&String> = keys.iter().collect();
-    ordered.sort();
-    let body = serde_json::to_string_pretty(&ordered)
-        .map_err(|error| CliError::Other(format!("cannot serialize --dedupe-state: {error}")))?;
-    let temp = path.with_extension("tmp");
-    std::fs::write(&temp, body).map_err(|error| {
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    std::fs::create_dir_all(&parent).map_err(|error| {
         CliError::Other(format!(
-            "cannot write --dedupe-state {}: {error}",
-            temp.display()
+            "cannot create --dedupe-state directory {}: {error}",
+            parent.display()
         ))
     })?;
+    let body = serde_json::to_string_pretty(ledger)
+        .map_err(|error| CliError::Other(format!("cannot serialize --dedupe-state: {error}")))?;
+    let temp = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("dedupe-state"),
+        std::process::id()
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    {
+        use std::io::Write;
+        let mut file = options.open(&temp).map_err(|error| {
+            CliError::Other(format!(
+                "cannot write --dedupe-state {}: {error}",
+                temp.display()
+            ))
+        })?;
+        file.write_all(body.as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|error| {
+                CliError::Other(format!(
+                    "cannot flush --dedupe-state {}: {error}",
+                    temp.display()
+                ))
+            })?;
+    }
     std::fs::rename(&temp, path).map_err(|error| {
+        let _ = std::fs::remove_file(&temp);
         CliError::Other(format!(
             "cannot replace --dedupe-state {}: {error}",
             path.display()
         ))
-    })
+    })?;
+    // Durability of the rename itself; best-effort because not every platform
+    // permits opening a directory.
+    if let Ok(dir) = std::fs::File::open(&parent) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
+}
+
+/// What the ledger decided before any observable work happens.
+enum LedgerGate {
+    /// No ledger configured, or `--force`: proceed without bookkeeping guards.
+    Proceed,
+    /// This evidence set was already accepted: report and exit successfully.
+    Skip,
+    /// A previous run posted without recording the outcome: fail closed unless
+    /// a safe-direction read-back can prove the relay holds it.
+    PendingAmbiguous,
+}
+
+/// Owns the lock, the on-disk state, and the two-phase transitions, so the
+/// propose flow reads as: gate, post, record. Every transition persists before
+/// it is relied on.
+struct ProposalLedger {
+    path: std::path::PathBuf,
+    _lock: LedgerLock,
+    state: DedupeLedger,
+    key: String,
+}
+
+impl ProposalLedger {
+    fn open(
+        path: &str,
+        channel: &str,
+        sources: &[String],
+        force: bool,
+    ) -> Result<(Self, LedgerGate), CliError> {
+        let path = std::path::PathBuf::from(path);
+        let lock = LedgerLock::acquire(&path)?;
+        let state = read_dedupe_state(&path)?;
+        let key = dedupe_key(channel, sources);
+        let gate = if force {
+            LedgerGate::Proceed
+        } else if state.accepted.contains(&key) {
+            LedgerGate::Skip
+        } else if state.pending.contains(&key) {
+            LedgerGate::PendingAmbiguous
+        } else {
+            LedgerGate::Proceed
+        };
+        Ok((
+            Self {
+                path,
+                _lock: lock,
+                state,
+                key,
+            },
+            gate,
+        ))
+    }
+
+    /// Persist the attempt before the relay can observe it, so a crash in the
+    /// post window is detectable on the next run rather than invisible.
+    fn mark_pending(&mut self) -> Result<(), CliError> {
+        self.state.pending.insert(self.key.clone());
+        write_dedupe_state(&self.path, &self.state)
+    }
+
+    fn record_accepted(&mut self) -> Result<(), CliError> {
+        self.state.pending.remove(&self.key);
+        self.state.accepted.insert(self.key.clone());
+        write_dedupe_state(&self.path, &self.state)
+    }
+
+    /// Classify a post failure per the relay contract (deliberated with the
+    /// agent panel): clear `pending` ONLY for responses the relay guarantees
+    /// are pre-ingestion; reconcile duplicate/conflict answers to `accepted`
+    /// (the logical record exists); leave everything else pending so the next
+    /// run fails closed instead of double-writing.
+    fn record_failure(&mut self, error: &CliError) -> Result<(), CliError> {
+        match error {
+            // 401/403 and endpoint validation happen before any forward to the
+            // DKG gateway — nothing was stored.
+            CliError::Auth(_) => {
+                self.state.pending.remove(&self.key);
+                write_dedupe_state(&self.path, &self.state)
+            }
+            CliError::Relay { status, body } => {
+                let body = body.to_ascii_lowercase();
+                let already_exists =
+                    *status == 409 || body.contains("duplicate") || body.contains("already");
+                let pre_ingestion = matches!(status, 400 | 404 | 413)
+                    && (body.contains("invalid")
+                        || body.contains("restricted")
+                        || body.contains("not found")
+                        || body.contains("exceeds"));
+                if already_exists {
+                    self.state.pending.remove(&self.key);
+                    self.state.accepted.insert(self.key.clone());
+                    write_dedupe_state(&self.path, &self.state)
+                } else if pre_ingestion {
+                    self.state.pending.remove(&self.key);
+                    write_dedupe_state(&self.path, &self.state)
+                } else {
+                    // Unfamiliar status: outcome unclassified, fail closed.
+                    Ok(())
+                }
+            }
+            // Transport failures and everything else: outcome unknown.
+            _ => Ok(()),
+        }
+    }
+}
+
+/// Safe-direction resolution of an ambiguous `pending` marker: a signed,
+/// authenticated read-back that finds the evidence promotes it to `accepted`;
+/// anything else — including a failed or empty read — leaves it pending.
+/// Absence is not proof the prior write failed, so this can only ever move a
+/// key toward `accepted`, never silently re-enable a post.
+async fn pending_readback_confirms(client: &BuzzClient, channel: &str, sources: &[String]) -> bool {
+    // The distiller records source-event provenance; any graph term containing
+    // one of our source ids is a positive confirmation.
+    let Some(first) = sources.first() else {
+        return false;
+    };
+    let needle = first.to_ascii_lowercase();
+    let sparql = format!(
+        "ASK {{ ?s ?p ?o . FILTER(CONTAINS(LCASE(STR(?o)), \"{needle}\") || CONTAINS(LCASE(STR(?s)), \"{needle}\")) }}"
+    );
+    let request = serde_json::json!({
+        "channelId": channel,
+        "operation": "semantic_query",
+        "scope": { "type": "current_channel" },
+        "arguments": { "sparql": sparql, "view": "both" }
+    });
+    match client.post_authed_json("/api/dkg/query", &request).await {
+        Ok(response) => {
+            serde_json::from_str::<serde_json::Value>(&response)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("boolean")
+                        .or_else(|| value.get("result").and_then(|r| r.get("boolean")))
+                        .and_then(serde_json::Value::as_bool)
+                })
+                == Some(true)
+        }
+        Err(_) => false,
+    }
 }
 
 async fn propose(
@@ -363,26 +618,61 @@ async fn propose(
             return Err(CliError::Usage("duplicate --source event id".into()));
         }
     }
-    // Consult the ledger before reading stdin or signing: an already-proposed
-    // evidence set must cost nothing and, above all, must not reach the relay.
-    let ledger_path = dedupe_state.map(std::path::PathBuf::from);
-    let key = dedupe_key(channel, sources);
-    let mut proposed: HashSet<String> = HashSet::new();
-    if let Some(path) = ledger_path.as_deref() {
-        proposed = read_dedupe_state(path)?;
-        if !force && proposed.contains(&key) {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "status": "skipped",
-                    "reason": "already proposed for this channel and source set",
-                    "channel": channel,
-                    "sources": sources,
-                })
-            );
-            return Ok(());
+    // `--force` is a human judgement about an ambiguous ledger; an unattended
+    // scheduler must never wield it (agent-panel decision).
+    if force {
+        use std::io::IsTerminal;
+        if !std::io::stdin().is_terminal() {
+            return Err(CliError::Usage(
+                "--force requires an interactive terminal; schedulers must never use it".into(),
+            ));
         }
     }
+    let mut ledger = match dedupe_state {
+        Some(path) => {
+            let (ledger, gate) = ProposalLedger::open(path, channel, sources, force)?;
+            match gate {
+                LedgerGate::Proceed => Some(ledger),
+                LedgerGate::Skip => {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "status": "skipped",
+                            "reason": "already proposed for this channel and source set",
+                            "channel": channel,
+                            "sources": sources,
+                        })
+                    );
+                    return Ok(());
+                }
+                LedgerGate::PendingAmbiguous => {
+                    // Safe-direction self-resolution: promote only on a
+                    // positive, authenticated read-back.
+                    if pending_readback_confirms(client, channel, sources).await {
+                        let mut ledger = ledger;
+                        ledger.record_accepted()?;
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "status": "skipped",
+                                "reason": "pending marker verified against the relay and promoted to accepted",
+                                "channel": channel,
+                                "sources": sources,
+                            })
+                        );
+                        return Ok(());
+                    }
+                    return Err(CliError::Other(format!(
+                        "a previous run posted this evidence set without recording the outcome, \
+                         and a read-back could not confirm it landed; the relay may already hold \
+                         it. Verify the channel's memory, then re-run with --force (interactive \
+                         only) or clear the pending key in {path}"
+                    )));
+                }
+            }
+        }
+        None => None,
+    };
     let content = read_file_or_stdin(input)?;
     validate_proposal_content(&content)?;
     let mut tags = vec![
@@ -402,12 +692,20 @@ async fn propose(
     )?;
     let value = serde_json::to_value(event)
         .map_err(|error| CliError::Other(format!("proposal serialization failed: {error}")))?;
-    let response = client.post_authed_json("/api/dkg/memory", &value).await?;
-    // Record only after the relay accepted the proposal. Recording earlier would
-    // let a transient failure permanently suppress a turn that never landed.
-    if let Some(path) = ledger_path.as_deref() {
-        proposed.insert(key);
-        write_dedupe_state(path, &proposed)?;
+    if let Some(ledger) = ledger.as_mut() {
+        ledger.mark_pending()?;
+    }
+    let response = match client.post_authed_json("/api/dkg/memory", &value).await {
+        Ok(response) => response,
+        Err(error) => {
+            if let Some(ledger) = ledger.as_mut() {
+                ledger.record_failure(&error)?;
+            }
+            return Err(error);
+        }
+    };
+    if let Some(ledger) = ledger.as_mut() {
+        ledger.record_accepted()?;
     }
     println!("{response}");
     Ok(())
@@ -460,24 +758,52 @@ mod tests {
     }
 
     #[test]
-    fn dedupe_state_roundtrips_and_survives_a_missing_file() {
+    fn ledger_roundtrips_pending_and_accepted_and_survives_a_missing_file() {
         let dir = std::env::temp_dir().join(format!("buzz-dedupe-{}", std::process::id()));
         let path = dir.join("state.json");
         let _ = std::fs::remove_dir_all(&dir);
 
         // A first run has no ledger yet; that is not an error.
-        assert!(read_dedupe_state(&path)
-            .expect("missing ledger reads empty")
-            .is_empty());
+        let empty = read_dedupe_state(&path).expect("missing ledger reads empty");
+        assert!(empty.accepted.is_empty() && empty.pending.is_empty());
 
-        let mut keys = HashSet::new();
-        keys.insert("channel:aaa".to_string());
-        keys.insert("channel:bbb".to_string());
-        write_dedupe_state(&path, &keys).expect("write ledger");
-        assert_eq!(read_dedupe_state(&path).expect("read ledger"), keys);
+        let mut ledger = DedupeLedger::default();
+        ledger.accepted.insert("channel:aaa".to_string());
+        ledger.pending.insert("channel:bbb".to_string());
+        write_dedupe_state(&path, &ledger).expect("write ledger");
 
-        // No stray temp file is left behind by the atomic replace.
+        let read = read_dedupe_state(&path).expect("read ledger");
+        assert_eq!(read.accepted, ledger.accepted);
+        assert_eq!(
+            read.pending, ledger.pending,
+            "pending must survive a restart"
+        );
+
+        // The temp file is process-unique and must not be left behind.
         assert!(!path.with_extension("tmp").exists());
+        let strays: Vec<_> = std::fs::read_dir(&dir)
+            .expect("list dir")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(
+            strays.is_empty(),
+            "no temp file may survive a successful write"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_accepted_only_array_is_still_readable() {
+        let dir = std::env::temp_dir().join(format!("buzz-dedupe-legacy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("state.json");
+        std::fs::write(&path, r#"["channel:aaa"]"#).expect("seed legacy ledger");
+
+        let read = read_dedupe_state(&path).expect("read legacy ledger");
+        assert!(read.accepted.contains("channel:aaa"));
+        assert!(read.pending.is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -492,6 +818,215 @@ mod tests {
         // Treating this as empty would re-enable duplicate writes.
         assert!(read_dedupe_state(&path).is_err());
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lock_is_exclusive_and_released_on_drop() {
+        let dir = std::env::temp_dir().join(format!("buzz-dedupe-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("state.json");
+
+        let held = LedgerLock::acquire(&path).expect("first lock");
+        // A concurrent scheduler must not proceed to read-then-post.
+        assert!(
+            LedgerLock::acquire(&path).is_err(),
+            "a second proposer must not acquire the lock"
+        );
+        drop(held);
+        // Released, so the next run can proceed.
+        let _next = LedgerLock::acquire(&path).expect("lock is reusable after drop");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn behavior_ledger(dir_tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("buzz-propose-{dir_tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        (dir.clone(), dir.join("ledger.json"))
+    }
+
+    fn behavior_client(base_url: &str) -> crate::client::BuzzClient {
+        crate::client::BuzzClient::new(base_url.to_string(), nostr::Keys::generate(), None, None)
+            .expect("test client")
+    }
+
+    /// A ledger that already accepted this evidence set must skip BEFORE any
+    /// network or stdin work: the mock relay observes zero requests.
+    #[tokio::test]
+    async fn accepted_ledger_skips_before_any_network_request() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_handler = hits.clone();
+        let app = axum::Router::new().fallback(axum::routing::any(move || {
+            let hits = hits_handler.clone();
+            async move {
+                hits.fetch_add(1, Ordering::SeqCst);
+                "unexpected"
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let (dir, ledger_path) = behavior_ledger("skip");
+        let channel = "0b6b1f1a-2c3d-4e5f-8a9b-0c1d2e3f4a5b";
+        let sources = vec!["aa".repeat(32)];
+        let mut ledger = DedupeLedger::default();
+        ledger.accepted.insert(dedupe_key(channel, &sources));
+        write_dedupe_state(&ledger_path, &ledger).expect("seed ledger");
+
+        let client = behavior_client(&format!("http://{addr}"));
+        let result = propose(
+            &client,
+            channel,
+            &sources,
+            "/nonexistent/never-read.json", // must not be read on the skip path
+            Some(ledger_path.to_str().unwrap()),
+            false,
+        )
+        .await;
+        assert!(result.is_ok(), "skip is success: {result:?}");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "no request may reach the relay"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A pending marker whose read-back cannot confirm the write must refuse to
+    /// post — at-least-once made visible instead of silent duplication.
+    #[tokio::test]
+    async fn unconfirmed_pending_marker_refuses_to_post() {
+        // Read-back query answers "false"; a subsequent memory POST would be a
+        // duplicate risk and must never happen.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let memory_hits = Arc::new(AtomicUsize::new(0));
+        let memory_handler = memory_hits.clone();
+        let app = axum::Router::new()
+            .route(
+                "/api/dkg/query",
+                axum::routing::post(|| async { axum::Json(serde_json::json!({"boolean": false})) }),
+            )
+            .route(
+                "/api/dkg/memory",
+                axum::routing::post(move || {
+                    let hits = memory_handler.clone();
+                    async move {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        "stored"
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let (dir, ledger_path) = behavior_ledger("pending");
+        let channel = "0b6b1f1a-2c3d-4e5f-8a9b-0c1d2e3f4a5b";
+        let sources = vec!["bb".repeat(32)];
+        let mut ledger = DedupeLedger::default();
+        ledger.pending.insert(dedupe_key(channel, &sources));
+        write_dedupe_state(&ledger_path, &ledger).expect("seed ledger");
+
+        let client = behavior_client(&format!("http://{addr}"));
+        let result = propose(
+            &client,
+            channel,
+            &sources,
+            "/nonexistent/never-read.json",
+            Some(ledger_path.to_str().unwrap()),
+            false,
+        )
+        .await;
+        assert!(result.is_err(), "unconfirmed pending must fail closed");
+        assert_eq!(
+            memory_hits.load(Ordering::SeqCst),
+            0,
+            "the ambiguous evidence set must not be posted again"
+        );
+        // The marker survives for the next run.
+        let after = read_dedupe_state(&ledger_path).expect("read ledger");
+        assert!(after.pending.contains(&dedupe_key(channel, &sources)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `--force` is a human affordance; in a non-interactive context (as in
+    /// this test harness) it must be refused outright.
+    #[tokio::test]
+    async fn force_is_refused_without_an_interactive_terminal() {
+        let client = behavior_client("http://127.0.0.1:9");
+        let result = propose(
+            &client,
+            "0b6b1f1a-2c3d-4e5f-8a9b-0c1d2e3f4a5b",
+            &["cc".repeat(32)],
+            "/nonexistent/never-read.json",
+            None,
+            true,
+        )
+        .await;
+        match result {
+            Err(CliError::Usage(message)) => {
+                assert!(message.contains("interactive"), "got: {message}")
+            }
+            other => panic!("expected a usage refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn duplicate_conflict_reconciles_pending_to_accepted() {
+        let (dir, ledger_path) = behavior_ledger("conflict");
+        let channel = "0b6b1f1a-2c3d-4e5f-8a9b-0c1d2e3f4a5b";
+        let sources = vec!["dd".repeat(32)];
+        let (mut ledger, _) =
+            ProposalLedger::open(ledger_path.to_str().unwrap(), channel, &sources, false)
+                .expect("open ledger");
+        ledger.mark_pending().expect("mark pending");
+        ledger
+            .record_failure(&CliError::Relay {
+                status: 409,
+                body: "duplicate proposal for this evidence set".into(),
+            })
+            .expect("classify conflict");
+        drop(ledger);
+        let after = read_dedupe_state(&ledger_path).expect("read ledger");
+        let key = dedupe_key(channel, &sources);
+        assert!(
+            after.accepted.contains(&key),
+            "conflict means the record exists"
+        );
+        assert!(!after.pending.contains(&key));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unclassified_failure_keeps_the_pending_marker() {
+        let (dir, ledger_path) = behavior_ledger("unknown");
+        let channel = "0b6b1f1a-2c3d-4e5f-8a9b-0c1d2e3f4a5b";
+        let sources = vec!["ee".repeat(32)];
+        let (mut ledger, _) =
+            ProposalLedger::open(ledger_path.to_str().unwrap(), channel, &sources, false)
+                .expect("open ledger");
+        ledger.mark_pending().expect("mark pending");
+        ledger
+            .record_failure(&CliError::Relay {
+                status: 503,
+                body: "unavailable".into(),
+            })
+            .expect("classify unknown");
+        drop(ledger);
+        let after = read_dedupe_state(&ledger_path).expect("read ledger");
+        let key = dedupe_key(channel, &sources);
+        assert!(
+            after.pending.contains(&key),
+            "unknown outcome must fail closed"
+        );
+        assert!(!after.accepted.contains(&key));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
