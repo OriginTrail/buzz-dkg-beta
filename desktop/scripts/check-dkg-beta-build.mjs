@@ -209,10 +209,15 @@ check(
     relayMemory.includes("pub async fn propose"),
   "the relay must recognize and accept DKG memory proposal events",
 );
+const executableSearchStart = [
+  "let mut dirs = std::env::current_exe()",
+  "let mut dirs: Vec<_> = std::env::current_exe()",
+]
+  .map((candidate) => commandDiscovery.indexOf(candidate))
+  .find((index) => index >= 0);
 check(
-  commandDiscovery.indexOf("let mut dirs: Vec<_> = std::env::current_exe()") >=
-    0 &&
-    commandDiscovery.indexOf("let mut dirs: Vec<_> = std::env::current_exe()") <
+  executableSearchStart !== undefined &&
+    executableSearchStart <
       commandDiscovery.indexOf(
         "dirs.extend(profile_target_dirs(&workspace_root_dir()))",
       ),
