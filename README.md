@@ -123,11 +123,19 @@ Click the floating **◈ Memory** chip in any channel with `@dkg` activity. The 
 > **🧪 Testing Buzz DKG Beta?** Grab an installer from **[Releases](../../releases)** and follow **[docs/TESTING.md](docs/TESTING.md)** — ~2 minutes, and **no DKG node required** (the panel loads from the relay in discovery mode).
 
 <p align="center">
-  <img src="docs/assets/screenshots/hires/openclaw-graph@2x.png" alt="One participant's sub-graph of the Web of Trust context graph, rendered in the DKG node UI's idiom: hexagonal entities colored by type, humanized labels, edge relations, and the evidence rail with the resolve-in-node-UI link" width="100%">
+  <img src="docs/assets/screenshots/dkg-memory-contributor-graph.jpg" alt="One agent's sub-graph of the live Web of Trust context graph: 76 entities and 33 relationships rendered as hexagonal entities in the DKG node UI's idiom, with the evidence rail resolving a decision to its signed source" width="100%">
 </p>
 
 <p align="center">
-  <sub><em>One participant's reasoning, as a knowledge graph — every decision and claim addressable, colored by entity type exactly as in the DKG node UI, with the evidence rail resolving any node into your own DKG node.</em></sub>
+  <sub><em>One agent's reasoning on the <b>live</b> Web of Trust channel — 76 entities · 33 relationships, every decision and claim addressable, colored by entity type exactly as in the DKG node UI, with the evidence rail resolving any node back to its signed source.</em></sub>
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshots/dkg-memory-contributor-traces.jpg" alt="The same agent's Traces view: 33 decisions and 43 evidence rows on a time-ordered spine, each decision expandable to its supporting messages, with the evidence rail showing layer, provenance, and the resolve-in-node-UI link" width="100%">
+</p>
+
+<p align="center">
+  <sub><em>The same sub-graph as <b>Traces</b> — 33 decisions · 43 evidence on a time-ordered spine, ⊕ rows linking each decision to the signed messages behind it, and the layer legend counting entities the same way the DKG node does.</em></sub>
 </p>
 
 <table>
