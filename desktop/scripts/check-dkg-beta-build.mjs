@@ -166,6 +166,18 @@ for (const required of [
   check(workflow.includes(required), `desktop workflow is missing ${required}`);
 }
 check(
+  workflow.includes(
+    "github.repository == 'OriginTrail/buzz-dkg-beta' && github.ref == 'refs/heads/main'",
+  ),
+  "the signing and publishing job graph must be rooted on protected main",
+);
+check(
+  workflow.includes("origintrail-buzz-source-sha:") &&
+    workflow.includes("RELEASE_BODY") &&
+    workflow.includes("grep -Fqx"),
+  "draft reuse must remain bound to the immutable canonical source SHA",
+);
+check(
   releaseConfigScript.includes("buildUpdaterReleaseConfig") &&
     sharedReleaseConfigScript.includes("createUpdaterArtifacts: true") &&
     sharedReleaseConfigScript.includes("BUZZ_UPDATER_PUBLIC_KEY") &&
