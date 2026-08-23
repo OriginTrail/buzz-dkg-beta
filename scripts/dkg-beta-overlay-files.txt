@@ -1,0 +1,25 @@
+# Distribution files restored over the immutable OriginTrail/buzz source tree.
+.github/workflows/dkg-beta-desktop.yml
+.github/workflows/promote-dkg-beta-desktop.yml
+docs/dkg-beta-desktop.md
+scripts/dkg-beta-overlay-files.txt
+scripts/dkg-beta-source.patch
+scripts/materialize-canonical-buzz-source.sh
+scripts/promote-dkg-beta-desktop-release.sh
+scripts/test-materialize-canonical-buzz-source.sh
+desktop/.env.dkg-beta
+desktop/src-tauri/Info.dkg-beta.plist
+desktop/src-tauri/tauri.dkg-beta.conf.json
+desktop/scripts/build-dkg-beta-frontend.sh
+desktop/scripts/build-dkg-beta-linux.sh
+desktop/scripts/build-dkg-beta-macos.sh
+desktop/scripts/build-dkg-beta-release-config.mjs
+desktop/scripts/build-dkg-beta-windows.sh
+desktop/scripts/check-dkg-beta-build.mjs
+desktop/scripts/dkg-beta-assets.mjs
+desktop/scripts/fix-appimage.sh
+desktop/scripts/generate-oss-latest-json.sh
+desktop/scripts/promote-dkg-beta-desktop-release.test.mjs
+desktop/scripts/set-dkg-beta-version.mjs
+desktop/scripts/updater-release-config.mjs
+desktop/scripts/updater-release-config.test.mjs
