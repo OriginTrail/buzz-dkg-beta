@@ -1,0 +1,17 @@
+diff --git a/desktop/package.json b/desktop/package.json
+--- a/desktop/package.json
++++ b/desktop/package.json
+@@ -5,10 +5,12 @@
+   "scripts": {
+     "dev": "vite",
+     "build": "tsc && vite build",
++    "build:dkg-beta": "tsc && vite build --mode dkg-beta",
+     "build:e2e": "tsc && vite build --mode e2e",
+     "typecheck": "tsc --noEmit",
+     "check:file-sizes": "node ./scripts/check-file-sizes.mjs",
+     "check:px-text": "node ./scripts/check-px-text.mjs",
+     "check:pubkey-truncation": "node ./scripts/check-pubkey-truncation.mjs",
++    "check:dkg-beta": "node ./scripts/check-dkg-beta-build.mjs && node --test ./scripts/promote-dkg-beta-desktop-release.test.mjs && bash ../scripts/test-materialize-canonical-buzz-source.sh",
+     "lint": "biome lint .",
+     "check": "biome check . && pnpm check:px-text && pnpm check:pubkey-truncation",
+     "format": "biome format --write .",

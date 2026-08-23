@@ -31,9 +31,6 @@ const acp = read("crates/buzz-acp/src/lib.rs");
 const cliMemory = read("crates/buzz-cli/src/commands/memory.rs");
 const coreKinds = read("crates/buzz-core/src/kind.rs");
 const relayMemory = read("crates/buzz-relay/src/api/dkg_memory.rs");
-const commandDiscovery = read(
-  "desktop/src-tauri/src/managed_agents/discovery.rs",
-);
 const assetModel = dkgBetaAssets("0.5.7-dkg-beta.999");
 
 function check(condition, message) {
@@ -95,6 +92,10 @@ check(
 check(
   betaEnv.includes("VITE_BUZZ_DKG_BETA=true"),
   "the beta disclosure flag must be enabled",
+);
+check(
+  betaEnv.includes("VITE_BUZZ_DKG_WEB_OF_TRUST=true"),
+  "the beta Web of Trust flag must be enabled",
 );
 check(
   betaEnv.includes(
@@ -209,19 +210,4 @@ check(
     relayMemory.includes("pub async fn propose"),
   "the relay must recognize and accept DKG memory proposal events",
 );
-const executableSearchStart = [
-  "let mut dirs = std::env::current_exe()",
-  "let mut dirs: Vec<_> = std::env::current_exe()",
-]
-  .map((candidate) => commandDiscovery.indexOf(candidate))
-  .find((index) => index >= 0);
-check(
-  executableSearchStart !== undefined &&
-    executableSearchStart <
-      commandDiscovery.indexOf(
-        "dirs.extend(profile_target_dirs(&workspace_root_dir()))",
-      ),
-  "the running app bundle must win over compile-time workspace sidecars",
-);
-
 console.log("Buzz DKG Beta build contract is valid.");

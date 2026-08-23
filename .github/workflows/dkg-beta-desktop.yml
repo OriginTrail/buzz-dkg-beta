@@ -37,13 +37,16 @@ env:
 jobs:
   validate:
     name: Validate beta build contract
-    if: github.repository == 'OriginTrail/buzz-dkg-beta'
+    if: github.repository == 'OriginTrail/buzz-dkg-beta' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+
+      - name: Test canonical source materialization
+        run: scripts/test-materialize-canonical-buzz-source.sh
 
       - name: Materialize reviewed OriginTrail/buzz source
         run: scripts/materialize-canonical-buzz-source.sh
@@ -447,12 +450,17 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             IS_DRAFT=$(gh release view "$TAG" --json isDraft --jq .isDraft)
             TARGET_COMMIT=$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)
+            RELEASE_BODY=$(gh release view "$TAG" --json body --jq .body)
             [[ "$IS_DRAFT" == true ]] || {
               echo "::error::Release $TAG is already published; versions are immutable"
               exit 1
             }
             [[ "$TARGET_COMMIT" == "$GITHUB_SHA" ]] || {
               echo "::error::Draft $TAG targets $TARGET_COMMIT, not $GITHUB_SHA"
+              exit 1
+            }
+            grep -Fqx '<!-- origintrail-buzz-source-sha:'"${SOURCE_SHA}"' -->' <<<"$RELEASE_BODY" || {
+              echo "::error::Draft $TAG was created from a different OriginTrail/buzz source commit"
               exit 1
             }
           else
@@ -462,7 +470,7 @@ jobs:
               --latest=false \
               --target "$GITHUB_SHA" \
               --title "Buzz DKG Beta ${VERSION}" \
-              --notes "Cross-platform beta for authenticated OriginTrail DKG community memory. Built from OriginTrail/buzz commit ${SOURCE_SHA}. Update bundles carry mandatory Tauri signatures; the macOS and Windows packages remain unsigned by Apple and Microsoft."
+              --notes $'<!-- origintrail-buzz-source-sha:'"${SOURCE_SHA}"$' -->\n\nCross-platform beta for authenticated OriginTrail DKG community memory. Built from OriginTrail/buzz commit '"${SOURCE_SHA}"$'. Update bundles carry mandatory Tauri signatures; the macOS and Windows packages remain unsigned by Apple and Microsoft.'
           fi
 
       - name: Upload complete package set
