@@ -36,6 +36,8 @@ git -C "$TOOLING_REPO" config user.email "beta-materialization@example.invalid"
 OVERLAY_PATHS=$(awk '!/^($|#)/ { print }' "$REPO_ROOT/scripts/dkg-beta-overlay-files.txt")
 # shellcheck disable=SC2086 # Paths are controlled by the newline-only manifest.
 git -C "$REPO_ROOT" archive HEAD -- $OVERLAY_PATHS | tar -x -C "$TOOLING_REPO"
+mkdir -p "$TOOLING_REPO/desktop"
+printf '%s\n' 'stale beta application code' >"$TOOLING_REPO/desktop/stale-beta-code.ts"
 git -C "$TOOLING_REPO" add .
 git -C "$TOOLING_REPO" commit -q -m tooling
 SOURCE_REPOSITORY="$SOURCE_REPO" SOURCE_REF=main EXPECTED_SOURCE_SHA="$SOURCE_SHA" \
@@ -44,6 +46,7 @@ SOURCE_REPOSITORY="$SOURCE_REPO" SOURCE_REF=main EXPECTED_SOURCE_SHA="$SOURCE_SH
 test -f "$TOOLING_REPO/canonical-source-marker"
 test -f "$TOOLING_REPO/scripts/dkg-beta-overlay-files.txt"
 test -f "$TOOLING_REPO/desktop/.env.dkg-beta"
+test ! -e "$TOOLING_REPO/desktop/stale-beta-code.ts"
 grep -Fq 'VITE_BUZZ_RELEASES_URL' \
   "$TOOLING_REPO/desktop/src/features/settings/hooks/use-updater.ts"
 node -e '

@@ -11,7 +11,7 @@ diff --git a/desktop/package.json b/desktop/package.json
      "check:file-sizes": "node ./scripts/check-file-sizes.mjs",
      "check:px-text": "node ./scripts/check-px-text.mjs",
      "check:pubkey-truncation": "node ./scripts/check-pubkey-truncation.mjs",
-+    "check:dkg-beta": "node ./scripts/check-dkg-beta-build.mjs && node --test ./scripts/promote-dkg-beta-desktop-release.test.mjs && bash ../scripts/test-materialize-canonical-buzz-source.sh",
++    "check:dkg-beta": "node ./scripts/check-dkg-beta-build.mjs && node --test ./scripts/promote-dkg-beta-desktop-release.test.mjs",
      "lint": "biome lint .",
      "check": "biome check . && pnpm check:px-text && pnpm check:pubkey-truncation",
      "format": "biome format --write .",
