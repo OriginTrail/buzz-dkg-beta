@@ -1,17 +1,11 @@
 diff --git a/desktop/package.json b/desktop/package.json
 --- a/desktop/package.json
 +++ b/desktop/package.json
-@@ -5,10 +5,12 @@
-   "scripts": {
-     "dev": "vite",
-     "build": "tsc && vite build",
-+    "build:dkg-beta": "tsc && vite build --mode dkg-beta",
+@@ -9,2 +9,3 @@
      "build:e2e": "tsc && vite build --mode e2e",
++    "build:dkg-beta": "tsc && vite build --mode dkg-beta",
      "typecheck": "tsc --noEmit",
-     "check:file-sizes": "node ./scripts/check-file-sizes.mjs",
-     "check:px-text": "node ./scripts/check-px-text.mjs",
+@@ -13,2 +14,3 @@
      "check:pubkey-truncation": "node ./scripts/check-pubkey-truncation.mjs",
 +    "check:dkg-beta": "node ./scripts/check-dkg-beta-build.mjs && node --test ./scripts/promote-dkg-beta-desktop-release.test.mjs",
      "lint": "biome lint .",
-     "check": "biome check . && pnpm check:px-text && pnpm check:pubkey-truncation",
-     "format": "biome format --write .",
